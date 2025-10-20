@@ -1,0 +1,36 @@
+# ElastiCache Monitor Configuration
+# Copy this to config.yaml and fill in your details
+
+# Cluster configuration
+cluster:
+  id: "my-cluster"
+  region: "ap-south-1"
+  
+# Redis credentials
+# IMPORTANT: Never commit config.yaml with real password!
+# Use environment variable instead: export REDIS_PASSWORD="your-password"
+redis:
+  password: "${REDIS_PASSWORD}"  # Will read from env var
+  
+# Monitoring settings
+monitoring:
+  duration: 120  # seconds
+  use_replicas: true  # Always use replicas in production!
+  
+# Output settings
+output:
+  directory: "./reports"
+  save_raw_logs: true
+  format: "both"  # both, text, json
+  
+# Scheduling (optional - for cron-like monitoring)
+schedule:
+  enabled: false
+  interval: "0 */6 * * *"  # Every 6 hours (cron format)
+  
+# Alerting thresholds (optional)
+alerts:
+  hot_shard_threshold: 50  # % deviation to consider "very hot"
+  hot_key_threshold: 1000  # access count in monitoring period
+  qps_threshold: 10000  # QPS to alert on
+
