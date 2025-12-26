@@ -228,9 +228,10 @@
         <div class="p-4">
             <div class="grid grid-cols-{{ jobs|length }} gap-6">
                 {% for job in jobs %}
+                {% set job_idx = loop.index %}
                 <div>
                     <h3 class="text-sm font-medium mb-3 
-                               {% if loop.index == 1 %}text-purple-400{% elif loop.index == 2 %}text-emerald-400{% elif loop.index == 3 %}text-amber-400{% else %}text-cyan-400{% endif %}">
+                               {% if job_idx == 1 %}text-purple-400{% elif job_idx == 2 %}text-emerald-400{% elif job_idx == 3 %}text-amber-400{% else %}text-cyan-400{% endif %}">
                         {{ job.name or job.replication_group_id[:15] }}
                     </h3>
                     <div class="space-y-2">
@@ -239,7 +240,7 @@
                             <div class="w-16 text-xs text-slate-400 font-mono truncate">{{ cmd.command }}</div>
                             <div class="flex-1 h-5 bg-slate-800 rounded-full overflow-hidden">
                                 <div class="h-full rounded-full 
-                                            {% if loop.parent.loop.index == 1 %}bg-purple-500{% elif loop.parent.loop.index == 2 %}bg-emerald-500{% elif loop.parent.loop.index == 3 %}bg-amber-500{% else %}bg-cyan-500{% endif %}"
+                                            {% if job_idx == 1 %}bg-purple-500{% elif job_idx == 2 %}bg-emerald-500{% elif job_idx == 3 %}bg-amber-500{% else %}bg-cyan-500{% endif %}"
                                      style="width: {{ (cmd.count / stats[job.id].top_commands[0].count * 100)|round(1) }}%"></div>
                             </div>
                             <div class="w-16 text-xs text-slate-400 text-right">{{ cmd.count|format_number }}</div>
