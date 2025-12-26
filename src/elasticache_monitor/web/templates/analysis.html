@@ -1,0 +1,365 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Breadcrumb -->
+    <nav class="flex items-center gap-2 text-sm">
+        <a href="/jobs" class="text-slate-400 hover:text-white transition-colors">Jobs</a>
+        <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        <a href="/jobs/{{ job.id }}" class="text-slate-400 hover:text-white transition-colors">
+            {{ job.name or job.id[:8] }}
+        </a>
+        <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        <span class="text-white">Analysis</span>
+    </nav>
+
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-white flex items-center gap-2">
+                <svg class="w-6 h-6 text-redis-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                Analysis
+            </h1>
+            <p class="text-slate-400 text-sm mt-1">
+                {{ job.name or job.replication_group_id }} — {{ total_commands|format_number }} commands captured
+            </p>
+        </div>
+        <a href="/query?job_id={{ job.id }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-all font-medium">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Query
+        </a>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-3 gap-4">
+        <div class="glass-card rounded-xl p-4">
+            <div class="text-3xl font-bold text-white">{{ total_commands|format_number }}</div>
+            <div class="text-sm text-slate-500">Total Commands</div>
+        </div>
+        <div class="glass-card rounded-xl p-4">
+            <div class="text-3xl font-bold text-emerald-400">{{ unique_keys|format_number }}</div>
+            <div class="text-sm text-slate-500">Unique Keys</div>
+        </div>
+        <div class="glass-card rounded-xl p-4">
+            <div class="text-3xl font-bold text-amber-400">{{ unique_patterns|format_number }}</div>
+            <div class="text-sm text-slate-500">Key Patterns</div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <form method="GET" class="glass-card rounded-xl p-6">
+        <div class="flex flex-wrap items-end gap-4">
+            <!-- Group By -->
+            <div class="space-y-2">
+                <label class="block text-sm font-medium text-slate-300">Group By</label>
+                <select name="group_by" 
+                        onchange="this.form.submit()"
+                        class="px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white focus:outline-none focus:border-redis-500/50">
+                    <option value="key_pattern" {% if group_by == 'key_pattern' %}selected{% endif %}>Key Pattern</option>
+                    <option value="key" {% if group_by == 'key' %}selected{% endif %}>Individual Key</option>
+                    <option value="shard" {% if group_by == 'shard' %}selected{% endif %}>Shard</option>
+                    <option value="command" {% if group_by == 'command' %}selected{% endif %}>Command</option>
+                    <option value="client_ip" {% if group_by == 'client_ip' %}selected{% endif %}>Client IP</option>
+                </select>
+            </div>
+
+            <!-- Shard Filter -->
+            <div class="space-y-2">
+                <label class="block text-sm font-medium text-slate-300">Shard</label>
+                <select name="shard_filter" 
+                        onchange="this.form.submit()"
+                        class="px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white focus:outline-none focus:border-redis-500/50">
+                    <option value="">All Shards</option>
+                    {% for shard in shards %}
+                    <option value="{{ shard.shard_name }}" {% if shard_filter == shard.shard_name %}selected{% endif %}>
+                        {{ shard.shard_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Command Filter -->
+            <div class="space-y-2">
+                <label class="block text-sm font-medium text-slate-300">Command</label>
+                <select name="command_filter" 
+                        onchange="this.form.submit()"
+                        class="px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white focus:outline-none focus:border-redis-500/50">
+                    <option value="">All Commands</option>
+                    {% for cmd in commands %}
+                    <option value="{{ cmd }}" {% if command_filter == cmd %}selected{% endif %}>{{ cmd }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Limit -->
+            <div class="space-y-2">
+                <label class="block text-sm font-medium text-slate-300">Limit</label>
+                <select name="limit" 
+                        onchange="this.form.submit()"
+                        class="px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-white focus:outline-none focus:border-redis-500/50">
+                    <option value="20" {% if limit == 20 %}selected{% endif %}>20</option>
+                    <option value="50" {% if limit == 50 %}selected{% endif %}>50</option>
+                    <option value="100" {% if limit == 100 %}selected{% endif %}>100</option>
+                    <option value="200" {% if limit == 200 %}selected{% endif %}>200</option>
+                </select>
+            </div>
+
+            <!-- Reset -->
+            <a href="/jobs/{{ job.id }}/analysis" class="px-4 py-2 rounded-lg bg-slate-700/50 text-slate-300 hover:text-white hover:bg-slate-700 transition-all">
+                Reset
+            </a>
+        </div>
+    </form>
+
+    <!-- Analysis Data -->
+    <script>
+        window.analysisData = {{ analysis_data | tojson | safe }};
+        window.totalCommandsCount = {{ total_commands }};
+        window.currentGroupBy = '{{ group_by }}';
+    </script>
+
+    <!-- Results -->
+    <div class="glass-card rounded-xl overflow-hidden" x-data="analysisTable()">
+        <div class="px-6 py-4 border-b border-slate-700/50 flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-white">
+                {% if group_by == 'key_pattern' %}Key Patterns{% elif group_by == 'key' %}Individual Keys{% elif group_by == 'shard' %}Shards{% elif group_by == 'command' %}Commands{% elif group_by == 'client_ip' %}Client IPs{% endif %}
+            </h3>
+            <span class="text-sm text-slate-500"><span x-text="sortedData.length"></span> results</span>
+        </div>
+        
+        {% if analysis_data %}
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-slate-700/50 text-left text-sm text-slate-400">
+                        <th class="px-6 py-3 font-medium cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('name')">
+                            <div class="flex items-center gap-1">
+                                {% if group_by == 'key_pattern' %}Pattern{% elif group_by == 'key' %}Key{% elif group_by == 'shard' %}Shard{% elif group_by == 'command' %}Command{% elif group_by == 'client_ip' %}Client IP{% endif %}
+                                <svg x-show="sortKey === 'name'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        {% if group_by == 'key' %}
+                        <th class="px-6 py-3 font-medium cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('shard')">
+                            <div class="flex items-center gap-1">
+                                Shard
+                                <svg x-show="sortKey === 'shard'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        {% endif %}
+                        <th class="px-6 py-3 font-medium text-right cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('count')">
+                            <div class="flex items-center justify-end gap-1">
+                                Count
+                                <svg x-show="sortKey === 'count'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="px-6 py-3 font-medium text-right cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('pct')">
+                            <div class="flex items-center justify-end gap-1">
+                                % of Total
+                                <svg x-show="sortKey === 'pct'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        {% if group_by in ['key_pattern', 'key', 'shard'] %}
+                        <th class="px-6 py-3 font-medium text-right cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort(groupBy === 'key' ? 'size' : groupBy === 'key_pattern' ? 'avg_size' : 'total_size')">
+                            <div class="flex items-center justify-end gap-1">
+                                Size
+                                <svg x-show="sortKey === 'size' || sortKey === 'avg_size' || sortKey === 'total_size'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        {% endif %}
+                        <th class="px-6 py-3 font-medium">Distribution</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="item in sortedData" :key="item.name">
+                        <tr class="border-b border-slate-800/50 hover:bg-slate-800/30">
+                            <td class="px-6 py-4">
+                                <div class="font-mono text-sm text-white max-w-md truncate" :title="item.name" x-text="item.name"></div>
+                            </td>
+                            {% if group_by == 'key' %}
+                            <td class="px-6 py-4">
+                                <span class="text-xs font-mono text-slate-500" x-text="item.shard"></span>
+                            </td>
+                            {% endif %}
+                            <td class="px-6 py-4 text-right">
+                                <span class="font-mono text-white" x-text="formatNumber(item.count)"></span>
+                            </td>
+                            <td class="px-6 py-4 text-right">
+                                <span class="text-slate-400" x-text="formatPct(item.count)"></span>
+                            </td>
+                            {% if group_by in ['key_pattern', 'key', 'shard'] %}
+                            <td class="px-6 py-4 text-right">
+                                {% if group_by == 'key' %}
+                                <span class="font-mono text-emerald-400" x-text="formatBytes(item.size)"></span>
+                                {% elif group_by == 'key_pattern' %}
+                                <span class="font-mono text-slate-400" x-text="item.avg_size ? '~' + formatBytes(item.avg_size) : '—'"></span>
+                                {% elif group_by == 'shard' %}
+                                <span class="font-mono text-slate-400" x-text="formatBytes(item.total_size)"></span>
+                                {% endif %}
+                            </td>
+                            {% endif %}
+                            <td class="px-6 py-4">
+                                <div class="w-32 h-2 bg-slate-800 rounded-full overflow-hidden">
+                                    <div class="h-full rounded-full transition-all"
+                                         :class="(item.count / maxCount * 100) > 80 ? 'bg-redis-500' : (item.count / maxCount * 100) > 50 ? 'bg-amber-500' : 'bg-emerald-500'"
+                                         :style="'width: ' + (item.count / maxCount * 100) + '%'"></div>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-12 text-center">
+            <svg class="w-12 h-12 mx-auto text-slate-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p class="text-slate-400">No data matches your filters</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Chart -->
+    {% if analysis_data %}
+    <div class="glass-card rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-white mb-4">Distribution Chart</h3>
+        <div class="h-64">
+            <canvas id="distributionChart"></canvas>
+        </div>
+    </div>
+    
+    <script>
+        const ctx = document.getElementById('distributionChart').getContext('2d');
+        const chartData = {
+            labels: [{% for item in analysis_data[:15] %}'{{ item.name[:30] }}{% if item.name|length > 30 %}...{% endif %}'{% if not loop.last %}, {% endif %}{% endfor %}],
+            datasets: [{
+                label: 'Count',
+                data: [{% for item in analysis_data[:15] %}{{ item.count }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                backgroundColor: 'rgba(220, 38, 38, 0.5)',
+                borderColor: 'rgba(220, 38, 38, 1)',
+                borderWidth: 1
+            }]
+        };
+        
+        new Chart(ctx, {
+            type: 'bar',
+            data: chartData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { 
+                            color: '#94a3b8',
+                            maxRotation: 45,
+                            minRotation: 45
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+    {% endif %}
+
+</div>
+
+<script>
+function analysisTable() {
+    return {
+        sortKey: 'count',
+        sortDir: 'desc',
+        rawData: window.analysisData || [],
+        totalCommands: window.totalCommandsCount || 1,
+        groupBy: window.currentGroupBy || 'key_pattern',
+        
+        get sortedData() {
+            const data = [...this.rawData];
+            const key = this.sortKey;
+            const dir = this.sortDir === 'asc' ? 1 : -1;
+            
+            return data.sort((a, b) => {
+                let aVal = a[key];
+                let bVal = b[key];
+                
+                // Handle percentage sorting
+                if (key === 'pct') {
+                    aVal = a.count / this.totalCommands;
+                    bVal = b.count / this.totalCommands;
+                }
+                
+                // Handle null/undefined
+                if (aVal == null) aVal = 0;
+                if (bVal == null) bVal = 0;
+                
+                // String comparison for name
+                if (key === 'name' || key === 'shard') {
+                    return dir * String(aVal).localeCompare(String(bVal));
+                }
+                
+                return dir * (aVal - bVal);
+            });
+        },
+        
+        get maxCount() {
+            return this.sortedData.length > 0 ? Math.max(...this.sortedData.map(d => d.count)) : 1;
+        },
+        
+        toggleSort(key) {
+            if (this.sortKey === key) {
+                this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                this.sortKey = key;
+                this.sortDir = key === 'name' || key === 'shard' ? 'asc' : 'desc';
+            }
+        },
+        
+        formatNumber(n) {
+            return n ? n.toLocaleString() : '0';
+        },
+        
+        formatBytes(bytes) {
+            if (!bytes) return '—';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let i = 0;
+            while (bytes >= 1024 && i < units.length - 1) {
+                bytes /= 1024;
+                i++;
+            }
+            return bytes.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+        },
+        
+        formatPct(count) {
+            return ((count / this.totalCommands) * 100).toFixed(1) + '%';
+        }
+    };
+}
+</script>
+{% endblock %}
+

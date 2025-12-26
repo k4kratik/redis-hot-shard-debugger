@@ -1,0 +1,875 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-8" x-data="{ 
+    refreshing: false,
+    jobStatus: '{{ job.status.value }}',
+    shards: [],
+    totalCommands: {{ job.total_commands }},
+    remainingTime: 0,
+    elapsedTime: 0,
+    timerInterval: null,
+    init() {
+        {% if job.status.value in ['pending', 'running'] %}
+        // Calculate initial remaining time
+        {% if job.started_at %}
+        const startedAt = new Date('{{ job.started_at.isoformat() }}Z');
+        const now = new Date();
+        this.elapsedTime = Math.floor((now - startedAt) / 1000);
+        this.remainingTime = Math.max(0, {{ job.duration_seconds }} - this.elapsedTime);
+        
+        // Start countdown timer
+        this.timerInterval = setInterval(() => {
+            if (this.remainingTime > 0) {
+                this.remainingTime--;
+                this.elapsedTime++;
+            }
+        }, 1000);
+        {% else %}
+        this.remainingTime = {{ job.duration_seconds }};
+        {% endif %}
+        
+        this.pollStatus();
+        setInterval(() => this.pollStatus(), 2000);
+        {% endif %}
+    },
+    formatTime(seconds) {
+        if (seconds <= 0) return '0s';
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins > 0) {
+            return mins + 'm ' + secs + 's';
+        }
+        return secs + 's';
+    },
+    async pollStatus() {
+        this.refreshing = true;
+        try {
+            const response = await fetch('/api/jobs/{{ job.id }}/status');
+            const data = await response.json();
+            this.jobStatus = data.status;
+            this.totalCommands = data.total_commands || 0;
+            
+            // Update shards data for live view
+            if (data.shards && data.shards.length > 0) {
+                this.shards = data.shards;
+            }
+            
+            // Reload if job completed or failed
+            if (data.status === 'completed' || data.status === 'failed') {
+                if (this.timerInterval) clearInterval(this.timerInterval);
+                window.location.reload();
+            }
+        } catch (e) {
+            console.error('Poll failed:', e);
+        }
+        this.refreshing = false;
+    }
+}">
+    <!-- Breadcrumb -->
+    <nav class="flex items-center gap-2 text-sm">
+        <a href="/jobs" class="text-slate-400 hover:text-white transition-colors">Jobs</a>
+        <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        {% if job.name %}
+        <span class="text-white">{{ job.name }}</span>
+        <span class="text-slate-600">•</span>
+        {% endif %}
+        <span class="text-slate-300 font-mono">{{ job.id[:8] }}...</span>
+    </nav>
+
+    <!-- Header -->
+    <div class="glass-card glow-border rounded-2xl p-6">
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div class="space-y-3">
+                <div class="flex items-center gap-3">
+                    <h1 class="text-2xl font-bold text-white">
+                        {{ job.name or job.replication_group_id }}
+                    </h1>
+                    {% if job.status.value == 'pending' %}
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-700 text-slate-300">
+                        <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                        Pending
+                    </span>
+                    {% elif job.status.value == 'running' %}
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300">
+                        <span class="w-1.5 h-1.5 rounded-full bg-amber-400 status-pulse"></span>
+                        Running
+                    </span>
+                    {% elif job.status.value == 'completed' %}
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        Completed
+                    </span>
+                    {% elif job.status.value == 'failed' %}
+                    <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-redis-500/20 text-redis-400">
+                        <span class="w-1.5 h-1.5 rounded-full bg-redis-400"></span>
+                        Failed
+                    </span>
+                    {% endif %}
+                    <span x-show="refreshing" class="text-xs text-slate-500">
+                        <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </span>
+                </div>
+                <div class="flex flex-wrap items-center gap-4 text-sm text-slate-400">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+                        </svg>
+                        <span class="font-mono">{{ job.replication_group_id }}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        <span>{{ job.duration_seconds|format_duration }} monitoring</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                        </svg>
+                        <span>{{ job.region }}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if job.status.value == 'completed' %}
+                <a href="/jobs/{{ job.id }}/analysis" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-redis-500/20 text-redis-400 hover:bg-redis-500/30 transition-all font-medium">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    Analyze
+                </a>
+                <a href="/query?job_id={{ job.id }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-all font-medium">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    Query
+                </a>
+                {% endif %}
+                <a href="/" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-700/50 text-slate-300 hover:text-white hover:bg-slate-700 transition-all">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                    </svg>
+                    New Job
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Timer Card (only show when running) -->
+    {% if job.status.value == 'running' %}
+    <div class="glass-card rounded-xl p-4" :class="remainingTime > 0 ? 'border border-amber-500/30 bg-amber-500/5' : 'border border-purple-500/30 bg-purple-500/5'">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full flex items-center justify-center" :class="remainingTime > 0 ? 'bg-amber-500/20' : 'bg-purple-500/20'">
+                    <template x-if="remainingTime > 0">
+                        <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </template>
+                    <template x-if="remainingTime <= 0">
+                        <svg class="w-5 h-5 text-purple-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </template>
+                </div>
+                <div>
+                    <template x-if="remainingTime > 0">
+                        <div>
+                            <div class="text-sm text-slate-400">Monitoring in progress</div>
+                            <div class="text-xl font-bold text-white font-mono" x-text="formatTime(remainingTime) + ' remaining'"></div>
+                        </div>
+                    </template>
+                    <template x-if="remainingTime <= 0">
+                        <div>
+                            <div class="text-sm text-purple-300">Finalizing...</div>
+                            <div class="text-lg font-medium text-purple-200">Saving data to database</div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            <div class="text-right">
+                <div class="text-sm text-slate-400">Commands captured</div>
+                <div class="text-2xl font-bold text-emerald-400 font-mono" x-text="totalCommands.toLocaleString()"></div>
+            </div>
+            <!-- Progress bar -->
+            <div class="hidden md:block w-48">
+                <template x-if="remainingTime > 0">
+                    <div>
+                        <div class="flex justify-between text-xs text-slate-500 mb-1">
+                            <span x-text="formatTime(elapsedTime)"></span>
+                            <span>{{ job.duration_seconds|format_duration }}</span>
+                        </div>
+                        <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full transition-all duration-1000" 
+                                 :style="'width: ' + Math.min(100, (elapsedTime / {{ job.duration_seconds }}) * 100) + '%'"></div>
+                        </div>
+                    </div>
+                </template>
+                <template x-if="remainingTime <= 0">
+                    <div>
+                        <div class="text-xs text-purple-400 mb-1">Processing captured commands</div>
+                        <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div class="h-full bg-purple-500 rounded-full animate-pulse" style="width: 100%"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Job Error Message -->
+    {% if job.error_message %}
+    <div class="glass-card rounded-xl p-4 border-l-4 border-redis-500 bg-redis-500/10">
+        <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-redis-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+                <h4 class="text-redis-300 font-medium">Error</h4>
+                <p class="text-redis-200 text-sm mt-1">{{ job.error_message }}</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- No traffic warning -->
+    {% if job.status.value == 'completed' and job.total_commands == 0 %}
+    <div class="glass-card rounded-xl p-4 border-l-4 border-amber-500 bg-amber-500/10">
+        <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div>
+                <h4 class="text-amber-300 font-medium">No Commands Captured</h4>
+                <p class="text-amber-200/80 text-sm mt-1">The monitoring completed but no Redis commands were captured. This could mean:</p>
+                <ul class="text-amber-200/60 text-sm mt-2 list-disc list-inside space-y-1">
+                    <li>The cache had no traffic during the monitoring period</li>
+                    <li>You're monitoring replicas but traffic goes to primary only</li>
+                    <li>Check server logs for connection/permission issues</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="glass-card rounded-xl p-4">
+            <div class="text-3xl font-bold text-white" x-text="totalCommands.toLocaleString()">{{ job.total_commands|format_number }}</div>
+            <div class="text-sm text-slate-500">Total Commands</div>
+        </div>
+        <div class="glass-card rounded-xl p-4">
+            <div class="text-3xl font-bold text-white">
+                <span x-show="shards.length > 0" x-text="shards.length"></span>
+                <span x-show="shards.length === 0">{{ shards|length }}</span>
+            </div>
+            <div class="text-sm text-slate-500">Shards Monitored</div>
+        </div>
+        <div class="glass-card rounded-xl p-4">
+            <div class="text-3xl font-bold text-emerald-400">
+                {{ shards|selectattr('shard.status.value', 'eq', 'completed')|list|length }}
+            </div>
+            <div class="text-sm text-slate-500">Completed</div>
+        </div>
+        <div class="glass-card rounded-xl p-4">
+            <div class="text-3xl font-bold text-slate-400">{{ job.endpoint_type|title }}</div>
+            <div class="text-sm text-slate-500">Endpoint Type</div>
+        </div>
+    </div>
+
+    <!-- Shards Grid -->
+    <div class="space-y-4">
+        <h2 class="text-lg font-semibold text-white flex items-center gap-2">
+            <svg class="w-5 h-5 text-redis-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+            </svg>
+            Shards (<span x-show="shards.length > 0" x-text="shards.length"></span><span x-show="shards.length === 0">{{ shards|length }}</span>)
+        </h2>
+        
+        <!-- Live shards from API (for running jobs) -->
+        <template x-if="shards.length > 0">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <template x-for="shard in shards" :key="shard.shard_name">
+                    <div class="glass-card rounded-xl p-5 space-y-4 hover:border-slate-600/50 transition-colors relative">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="space-y-1 min-w-0 flex-1">
+                                <h3 class="font-semibold text-white" x-text="shard.shard_name"></h3>
+                                <p class="text-xs font-mono text-slate-500 truncate" x-text="shard.host + ':' + shard.port"></p>
+                            </div>
+                            <!-- Status badge -->
+                            <div class="flex-shrink-0">
+                                <template x-if="shard.status === 'pending'">
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-700 text-slate-300 whitespace-nowrap">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                                        Pending
+                                    </span>
+                                </template>
+                                <template x-if="shard.status === 'connecting'">
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 whitespace-nowrap">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-amber-400 status-pulse"></span>
+                                        Connecting
+                                    </span>
+                                </template>
+                                <template x-if="shard.status === 'monitoring'">
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 whitespace-nowrap">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-amber-400 status-pulse"></span>
+                                        Monitoring
+                                    </span>
+                                </template>
+                                <template x-if="shard.status === 'finalizing'">
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-300 whitespace-nowrap">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-purple-400 status-pulse"></span>
+                                        Saving...
+                                    </span>
+                                </template>
+                                <template x-if="shard.status === 'completed'">
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400 whitespace-nowrap">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                                        Completed
+                                    </span>
+                                </template>
+                                <template x-if="shard.status === 'failed'">
+                                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-redis-500/20 text-redis-400 whitespace-nowrap">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-redis-400"></span>
+                                        Failed
+                                    </span>
+                                </template>
+                            </div>
+                        </div>
+                        
+                        <!-- Error message -->
+                        <template x-if="shard.error">
+                            <div class="text-sm text-redis-400 bg-redis-500/10 rounded-lg p-3 font-mono text-xs break-all" x-text="shard.error"></div>
+                        </template>
+                        
+                        <!-- Warning if no commands -->
+                        <template x-if="shard.status === 'completed' && shard.command_count === 0">
+                            <div class="text-xs text-amber-400 bg-amber-500/10 rounded-lg p-2 flex items-center gap-2">
+                                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                                No traffic captured - shard may be idle
+                            </div>
+                        </template>
+
+                        <!-- Stats -->
+                        <div class="grid grid-cols-2 gap-4 pt-3 border-t border-slate-700/50">
+                            <div>
+                                <div class="text-xl font-bold text-white" x-text="shard.command_count.toLocaleString()"></div>
+                                <div class="text-xs text-slate-500">Commands</div>
+                            </div>
+                            <div>
+                                <div class="text-xl font-bold text-slate-300" x-text="shard.qps.toFixed(1)"></div>
+                                <div class="text-xs text-slate-500">QPS</div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </template>
+        
+        <!-- Static shards from server (for completed jobs or initial render) -->
+        <template x-if="shards.length === 0">
+            <div>
+                {% if shards %}
+                <!-- Find max commands for heat indicator -->
+                {% set max_commands = shards|map(attribute='command_count')|max %}
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {% for item in shards %}
+                    {% set heat_pct = (item.command_count / max_commands * 100) if max_commands > 0 else 0 %}
+                    <div class="glass-card rounded-xl p-5 space-y-4 hover:border-slate-600/50 transition-colors relative">
+                        <!-- Heat indicator bar -->
+                        {% if item.command_count > 0 and heat_pct > 50 %}
+                        <div class="absolute top-0 left-0 h-1 hot-indicator" style="width: {{ heat_pct }}%;"></div>
+                        {% elif item.command_count > 0 %}
+                        <div class="absolute top-0 left-0 h-1 bg-emerald-500" style="width: {{ heat_pct }}%;"></div>
+                        {% endif %}
+                        
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="space-y-1 min-w-0 flex-1">
+                                <h3 class="font-semibold text-white flex items-center gap-2">
+                                    {{ item.shard.shard_name }}
+                                    {% if heat_pct > 80 %}
+                                    <span class="text-xs px-1.5 py-0.5 bg-redis-500/20 text-redis-400 rounded-full">🔥 Hot</span>
+                                    {% endif %}
+                                </h3>
+                                <p class="text-xs font-mono text-slate-500 truncate">{{ item.shard.host }}:{{ item.shard.port }}</p>
+                            </div>
+                            <div class="flex-shrink-0">
+                                {% if item.shard.status.value == 'pending' %}
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-700 text-slate-300 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                                    Pending
+                                </span>
+                                {% elif item.shard.status.value == 'connecting' %}
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400 status-pulse"></span>
+                                    Connecting
+                                </span>
+                                {% elif item.shard.status.value == 'monitoring' %}
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/20 text-amber-300 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-amber-400 status-pulse"></span>
+                                    Monitoring
+                                </span>
+                                {% elif item.shard.status.value == 'finalizing' %}
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-300 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-purple-400 status-pulse"></span>
+                                    Saving...
+                                </span>
+                                {% elif item.shard.status.value == 'completed' %}
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                                    Completed
+                                </span>
+                                {% elif item.shard.status.value == 'failed' %}
+                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-redis-500/20 text-redis-400 whitespace-nowrap">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-redis-400"></span>
+                                    Failed
+                                </span>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        {% if item.shard.error_message %}
+                        <div class="text-sm text-redis-400 bg-redis-500/10 rounded-lg p-3 font-mono text-xs break-all">
+                            {{ item.shard.error_message[:200] }}{% if item.shard.error_message|length > 200 %}...{% endif %}
+                        </div>
+                        {% endif %}
+
+                        <!-- Stats -->
+                        <div class="grid grid-cols-2 gap-4 pt-3 border-t border-slate-700/50">
+                            <div>
+                                <div class="text-xl font-bold text-white">{{ item.command_count|format_number }}</div>
+                                <div class="text-xs text-slate-500">Commands</div>
+                            </div>
+                            <div>
+                                <div class="text-xl font-bold text-slate-300">{{ "%.1f"|format(item.qps) }}</div>
+                                <div class="text-xs text-slate-500">QPS</div>
+                            </div>
+                        </div>
+
+                        {% if item.shard.status.value == 'completed' and item.command_count > 0 %}
+                        <a href="/jobs/{{ job.id }}/shards/{{ item.shard.shard_name }}" 
+                           class="flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded-lg bg-slate-700/50 text-slate-300 font-medium hover:bg-slate-700 hover:text-white transition-colors">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            View Details
+                        </a>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="glass-card rounded-xl p-8 text-center">
+                    {% if job.status.value == 'failed' %}
+                    <svg class="w-12 h-12 mx-auto text-redis-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p class="text-redis-400 font-medium">Failed to discover endpoints</p>
+                    <p class="text-slate-500 text-sm mt-2">Check the error message above for details</p>
+                    {% elif job.status.value == 'completed' %}
+                    <svg class="w-12 h-12 mx-auto text-slate-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p class="text-slate-400">No shards were monitored</p>
+                    {% else %}
+                    <svg class="w-12 h-12 mx-auto text-slate-600 mb-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p class="text-slate-400">Discovering endpoints...</p>
+                    <p class="text-slate-600 text-xs mt-2">Querying AWS ElastiCache API...</p>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </template>
+    </div>
+
+    {% if job.status.value == 'completed' and shards %}
+    <!-- Quick Charts -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Shard Distribution Chart -->
+        <div class="glass-card rounded-xl p-6" x-data="{ viewMode: 'total' }">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold text-white">Shard Distribution</h3>
+                <div class="flex rounded-lg bg-slate-800/50 p-0.5">
+                    <button @click="viewMode = 'total'; updateChart('total')" 
+                            :class="viewMode === 'total' ? 'bg-redis-500 text-white' : 'text-slate-400 hover:text-white'"
+                            class="px-3 py-1 text-xs font-medium rounded-md transition-all">
+                        Total
+                    </button>
+                    <button @click="viewMode = 'type'; updateChart('type')" 
+                            :class="viewMode === 'type' ? 'bg-redis-500 text-white' : 'text-slate-400 hover:text-white'"
+                            class="px-3 py-1 text-xs font-medium rounded-md transition-all">
+                        Commands
+                    </button>
+                    <button @click="viewMode = 'pattern'; updateChart('pattern')" 
+                            :class="viewMode === 'pattern' ? 'bg-redis-500 text-white' : 'text-slate-400 hover:text-white'"
+                            class="px-3 py-1 text-xs font-medium rounded-md transition-all">
+                        Patterns
+                    </button>
+                </div>
+            </div>
+            <canvas id="shardChart" height="200"></canvas>
+            <div x-show="viewMode !== 'total'" x-transition class="mt-3 pt-3 border-t border-slate-700/30 flex items-center justify-center gap-4 text-xs text-slate-500">
+                <span class="flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                    </svg>
+                    <span><strong class="text-slate-400">Click</strong> legend to isolate</span>
+                </span>
+                <span class="text-slate-600">•</span>
+                <span class="flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                    </svg>
+                    <span><strong class="text-slate-400">Right-click</strong> to hide/show</span>
+                </span>
+            </div>
+        </div>
+        
+        <!-- Command Types Chart (placeholder) -->
+        <div class="glass-card rounded-xl p-6">
+            <h3 class="text-lg font-semibold text-white mb-4">Quick Analysis</h3>
+            <div class="space-y-4">
+                <a href="/jobs/{{ job.id }}/analysis?group_by=key_pattern" class="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors group">
+                    <div class="flex items-center gap-3">
+                        <span class="text-lg">📊</span>
+                        <span class="text-slate-300 group-hover:text-white">Key Pattern Analysis</span>
+                    </div>
+                    <svg class="w-4 h-4 text-slate-600 group-hover:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </a>
+                <a href="/jobs/{{ job.id }}/analysis?group_by=key" class="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors group">
+                    <div class="flex items-center gap-3">
+                        <span class="text-lg">🔑</span>
+                        <span class="text-slate-300 group-hover:text-white">Top Keys with Sizes</span>
+                    </div>
+                    <svg class="w-4 h-4 text-slate-600 group-hover:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </a>
+                <a href="/jobs/{{ job.id }}/analysis?group_by=command" class="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors group">
+                    <div class="flex items-center gap-3">
+                        <span class="text-lg">⚡</span>
+                        <span class="text-slate-300 group-hover:text-white">Command Distribution</span>
+                    </div>
+                    <svg class="w-4 h-4 text-slate-600 group-hover:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </a>
+                <a href="/jobs/{{ job.id }}/analysis?group_by=client_ip" class="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors group">
+                    <div class="flex items-center gap-3">
+                        <span class="text-lg">🖥️</span>
+                        <span class="text-slate-300 group-hover:text-white">Client Analysis</span>
+                    </div>
+                    <svg class="w-4 h-4 text-slate-600 group-hover:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Chart data setup
+        {% set max_commands = shards|map(attribute='command_count')|max %}
+        const shardLabels = [{% for item in shards %}'{{ item.shard.shard_name }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+        const commandTypes = {{ command_types | tojson | safe }};
+        const commandByShard = {{ command_by_shard | tojson | safe }};
+        const topPatterns = {{ top_patterns | tojson | safe }};
+        const patternByShard = {{ pattern_by_shard | tojson | safe }};
+        
+        // Color palette for command types
+        const cmdColors = {
+            'GET': { bg: 'rgba(16, 185, 129, 0.7)', border: 'rgba(16, 185, 129, 1)' },
+            'SET': { bg: 'rgba(59, 130, 246, 0.7)', border: 'rgba(59, 130, 246, 1)' },
+            'HGET': { bg: 'rgba(139, 92, 246, 0.7)', border: 'rgba(139, 92, 246, 1)' },
+            'HSET': { bg: 'rgba(236, 72, 153, 0.7)', border: 'rgba(236, 72, 153, 1)' },
+            'DEL': { bg: 'rgba(220, 38, 38, 0.7)', border: 'rgba(220, 38, 38, 1)' },
+            'EXPIRE': { bg: 'rgba(249, 115, 22, 0.7)', border: 'rgba(249, 115, 22, 1)' },
+            'LPUSH': { bg: 'rgba(34, 211, 238, 0.7)', border: 'rgba(34, 211, 238, 1)' },
+            'RPUSH': { bg: 'rgba(45, 212, 191, 0.7)', border: 'rgba(45, 212, 191, 1)' },
+            'SADD': { bg: 'rgba(168, 85, 247, 0.7)', border: 'rgba(168, 85, 247, 1)' },
+            'ZADD': { bg: 'rgba(251, 146, 60, 0.7)', border: 'rgba(251, 146, 60, 1)' },
+        };
+        
+        // Pattern colors (vibrant palette)
+        const patternColors = [
+            { bg: 'rgba(239, 68, 68, 0.7)', border: 'rgba(239, 68, 68, 1)' },    // red
+            { bg: 'rgba(59, 130, 246, 0.7)', border: 'rgba(59, 130, 246, 1)' },  // blue
+            { bg: 'rgba(16, 185, 129, 0.7)', border: 'rgba(16, 185, 129, 1)' },  // emerald
+            { bg: 'rgba(249, 115, 22, 0.7)', border: 'rgba(249, 115, 22, 1)' },  // orange
+            { bg: 'rgba(139, 92, 246, 0.7)', border: 'rgba(139, 92, 246, 1)' },  // purple
+            { bg: 'rgba(236, 72, 153, 0.7)', border: 'rgba(236, 72, 153, 1)' },  // pink
+            { bg: 'rgba(34, 211, 238, 0.7)', border: 'rgba(34, 211, 238, 1)' },  // cyan
+            { bg: 'rgba(250, 204, 21, 0.7)', border: 'rgba(250, 204, 21, 1)' },  // yellow
+            { bg: 'rgba(168, 85, 247, 0.7)', border: 'rgba(168, 85, 247, 1)' },  // violet
+            { bg: 'rgba(45, 212, 191, 0.7)', border: 'rgba(45, 212, 191, 1)' },  // teal
+        ];
+        
+        const defaultColors = [
+            { bg: 'rgba(148, 163, 184, 0.7)', border: 'rgba(148, 163, 184, 1)' },
+            { bg: 'rgba(100, 116, 139, 0.7)', border: 'rgba(100, 116, 139, 1)' },
+            { bg: 'rgba(71, 85, 105, 0.7)', border: 'rgba(71, 85, 105, 1)' },
+        ];
+        
+        // Total commands data
+        const totalData = {
+            labels: shardLabels,
+            datasets: [{
+                label: 'Commands',
+                data: [{% for item in shards %}{{ item.command_count }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                backgroundColor: [
+                    {% for item in shards %}
+                    {% set heat_pct = (item.command_count / max_commands * 100) if max_commands > 0 else 0 %}
+                    {% if heat_pct > 80 %}'rgba(220, 38, 38, 0.7)'{% elif heat_pct > 50 %}'rgba(249, 115, 22, 0.7)'{% else %}'rgba(16, 185, 129, 0.7)'{% endif %}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                ],
+                borderColor: [
+                    {% for item in shards %}
+                    {% set heat_pct = (item.command_count / max_commands * 100) if max_commands > 0 else 0 %}
+                    {% if heat_pct > 80 %}'rgba(220, 38, 38, 1)'{% elif heat_pct > 50 %}'rgba(249, 115, 22, 1)'{% else %}'rgba(16, 185, 129, 1)'{% endif %}{% if not loop.last %}, {% endif %}
+                    {% endfor %}
+                ],
+                borderWidth: 1
+            }]
+        };
+        
+        // Build command type datasets
+        function buildTypeDatasets() {
+            return commandTypes.map((cmd, idx) => {
+                const colors = cmdColors[cmd] || defaultColors[idx % defaultColors.length];
+                return {
+                    label: cmd,
+                    data: shardLabels.map(shard => (commandByShard[shard] && commandByShard[shard][cmd]) || 0),
+                    backgroundColor: colors.bg,
+                    borderColor: colors.border,
+                    borderWidth: 1
+                };
+            });
+        }
+        
+        // Build pattern datasets
+        function buildPatternDatasets() {
+            return topPatterns.map((pattern, idx) => {
+                const colors = patternColors[idx % patternColors.length];
+                // Truncate pattern label for legend
+                const shortLabel = pattern.length > 25 ? pattern.substring(0, 22) + '...' : pattern;
+                return {
+                    label: shortLabel,
+                    data: shardLabels.map(shard => (patternByShard[shard] && patternByShard[shard][pattern]) || 0),
+                    backgroundColor: colors.bg,
+                    borderColor: colors.border,
+                    borderWidth: 1
+                };
+            });
+        }
+        
+        const typeData = {
+            labels: shardLabels,
+            datasets: buildTypeDatasets()
+        };
+        
+        const patternData = {
+            labels: shardLabels,
+            datasets: buildPatternDatasets()
+        };
+        
+        // Track hidden/isolated state
+        let hiddenDatasets = new Set();
+        let isolatedDataset = null;
+        
+        // Custom legend click handler
+        function legendClickHandler(e, legendItem, legend) {
+            const index = legendItem.datasetIndex;
+            const chart = legend.chart;
+            
+            // Left click: Isolate this dataset (show only this one)
+            if (isolatedDataset === index) {
+                // Click again to show all
+                isolatedDataset = null;
+                hiddenDatasets.clear();
+                chart.data.datasets.forEach((ds, i) => {
+                    chart.setDatasetVisibility(i, true);
+                });
+            } else {
+                // Isolate: hide all except clicked
+                isolatedDataset = index;
+                hiddenDatasets.clear();
+                chart.data.datasets.forEach((ds, i) => {
+                    chart.setDatasetVisibility(i, i === index);
+                    if (i !== index) hiddenDatasets.add(i);
+                });
+            }
+            chart.update();
+        }
+        
+        // Prevent context menu and handle right-click
+        document.getElementById('shardChart').addEventListener('contextmenu', (e) => e.preventDefault());
+        
+        // Custom legend labels generator with greyed out style
+        function generateLabels(chart) {
+            const datasets = chart.data.datasets;
+            return datasets.map((ds, i) => {
+                const isHidden = !chart.isDatasetVisible(i);
+                return {
+                    text: ds.label,
+                    fillStyle: isHidden ? 'rgba(100, 116, 139, 0.3)' : ds.backgroundColor,
+                    strokeStyle: isHidden ? 'rgba(100, 116, 139, 0.5)' : ds.borderColor,
+                    lineWidth: ds.borderWidth,
+                    hidden: false, // We manage visibility ourselves
+                    datasetIndex: i,
+                    fontColor: isHidden ? 'rgba(148, 163, 184, 0.4)' : '#94a3b8'
+                };
+            });
+        }
+        
+        // Create chart with interactive legend
+        const ctx = document.getElementById('shardChart').getContext('2d');
+        let shardChart = new Chart(ctx, {
+            type: 'bar',
+            data: totalData,
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { 
+                        display: false,
+                        onClick: legendClickHandler,
+                        labels: {
+                            generateLabels: generateLabels,
+                            color: '#94a3b8',
+                            boxWidth: 12,
+                            padding: 8
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => items[0]?.label || '',
+                            label: (item) => `${item.dataset.label}: ${item.raw.toLocaleString()}`
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        stacked: false,
+                        grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: {
+                        stacked: false,
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8' }
+                    }
+                },
+                // Handle right-click on chart bars
+                onClick: (e, elements, chart) => {
+                    if (e.native.button === 2 && elements.length > 0) {
+                        // Right click on bar - hide that dataset
+                        const datasetIndex = elements[0].datasetIndex;
+                        hiddenDatasets.add(datasetIndex);
+                        isolatedDataset = null;
+                        chart.setDatasetVisibility(datasetIndex, false);
+                        chart.update();
+                    }
+                }
+            }
+        });
+        
+        // Add mousedown listener for right-click on legend
+        document.getElementById('shardChart').addEventListener('mousedown', (e) => {
+            if (e.button === 2) { // Right click
+                const legendHitBoxes = shardChart.legend?.legendHitBoxes || [];
+                const rect = e.target.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                for (let i = 0; i < legendHitBoxes.length; i++) {
+                    const box = legendHitBoxes[i];
+                    if (x >= box.left && x <= box.left + box.width && 
+                        y >= box.top && y <= box.top + box.height) {
+                        // Right-clicked on legend item - toggle hide
+                        if (hiddenDatasets.has(i)) {
+                            hiddenDatasets.delete(i);
+                            shardChart.setDatasetVisibility(i, true);
+                        } else {
+                            hiddenDatasets.add(i);
+                            shardChart.setDatasetVisibility(i, false);
+                        }
+                        isolatedDataset = null;
+                        shardChart.update();
+                        break;
+                    }
+                }
+            }
+        });
+        
+        // Reset filters when switching modes
+        function resetFilters() {
+            hiddenDatasets.clear();
+            isolatedDataset = null;
+        }
+        
+        // Update chart function
+        function updateChart(mode) {
+            resetFilters();
+            if (mode === 'total') {
+                shardChart.data = totalData;
+                shardChart.options.plugins.legend.display = false;
+                shardChart.options.scales.y.stacked = false;
+                shardChart.options.scales.x.stacked = false;
+            } else if (mode === 'type') {
+                shardChart.data = typeData;
+                shardChart.options.plugins.legend.display = true;
+                shardChart.options.plugins.legend.position = 'bottom';
+                shardChart.options.plugins.legend.labels = { 
+                    generateLabels: generateLabels,
+                    color: '#94a3b8', 
+                    boxWidth: 12, 
+                    padding: 8 
+                };
+                shardChart.options.scales.y.stacked = true;
+                shardChart.options.scales.x.stacked = true;
+            } else if (mode === 'pattern') {
+                shardChart.data = patternData;
+                shardChart.options.plugins.legend.display = true;
+                shardChart.options.plugins.legend.position = 'bottom';
+                shardChart.options.plugins.legend.labels = { 
+                    generateLabels: generateLabels,
+                    color: '#94a3b8', 
+                    boxWidth: 12, 
+                    padding: 6, 
+                    font: { size: 10 } 
+                };
+                shardChart.options.scales.y.stacked = true;
+                shardChart.options.scales.x.stacked = true;
+            }
+            // Reset all dataset visibility
+            shardChart.data.datasets.forEach((ds, i) => {
+                shardChart.setDatasetVisibility(i, true);
+            });
+            shardChart.update();
+        }
+    </script>
+    {% endif %}
+</div>
+{% endblock %}

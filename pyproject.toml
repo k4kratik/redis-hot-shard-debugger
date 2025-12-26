@@ -1,7 +1,7 @@
 [project]
 name = "elasticache-monitor"
-version = "1.0.0"
-description = "ElastiCache hot shard debugger and monitoring tool"
+version = "1.1.0"
+description = "ElastiCache hot shard debugger and monitoring tool with web UI"
 authors = [
     {name = "Kutumb Infrastructure Team"}
 ]
@@ -14,6 +14,11 @@ dependencies = [
     "tabulate>=0.9.0",
     "colorama>=0.4.6",
     "pyyaml>=6.0",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "sqlalchemy>=2.0.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.6",
 ]
 
 [project.scripts]
@@ -22,6 +27,7 @@ elasticache-endpoints = "elasticache_monitor.cli:get_endpoints"
 elasticache-analyze = "elasticache_monitor.cli:analyze_logs"
 elasticache-schedule = "elasticache_monitor.cli:scheduled_monitor"
 elasticache-query = "elasticache_monitor.cli:query_db"
+elasticache-web = "elasticache_monitor.cli:web_server"
 
 [project.optional-dependencies]
 dev = [

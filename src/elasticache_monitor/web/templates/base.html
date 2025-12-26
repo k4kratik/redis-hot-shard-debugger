@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }} | Redis Monitor</title>
+    <!-- Redis-style favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23dc2626' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5z'/%3E%3Cpath d='M2 17l10 5 10-5'/%3E%3Cpath d='M2 12l10 5 10-5'/%3E%3C/svg%3E">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+                        mono: ['IBM Plex Mono', 'monospace'],
+                    },
+                    colors: {
+                        redis: {
+                            50: '#fef2f2',
+                            100: '#fee2e2',
+                            200: '#fecaca',
+                            300: '#fca5a5',
+                            400: '#f87171',
+                            500: '#dc2626',
+                            600: '#b91c1c',
+                            700: '#991b1b',
+                            800: '#7f1d1d',
+                            900: '#450a0a',
+                        },
+                        slate: {
+                            750: '#293548',
+                            850: '#172033',
+                            950: '#0a0f1a',
+                        },
+                        emerald: {
+                            350: '#4ade80',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        [x-cloak] { display: none !important; }
+        body {
+            background: linear-gradient(135deg, #0a0f1a 0%, #172033 50%, #0a0f1a 100%);
+            background-attachment: fixed;
+        }
+        .glass-card {
+            background: rgba(23, 32, 51, 0.8);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        .glow-border {
+            box-shadow: 0 0 30px rgba(220, 38, 38, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        .status-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .code-block {
+            background: linear-gradient(180deg, rgba(23, 32, 51, 0.9) 0%, rgba(10, 15, 26, 0.8) 100%);
+        }
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(30, 41, 59, 0.5);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(100, 116, 139, 0.5);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 116, 139, 0.7);
+        }
+        .hot-indicator {
+            background: linear-gradient(90deg, #dc2626, #f97316, #eab308);
+            background-size: 200% 100%;
+            animation: hot-gradient 3s ease infinite;
+        }
+        @keyframes hot-gradient {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+    </style>
+</head>
+<body class="h-full font-sans text-slate-100 antialiased">
+    <div class="min-h-full flex flex-col">
+        <!-- Navigation -->
+        <nav class="glass-card border-b border-slate-700/50 sticky top-0 z-50">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex items-center justify-between h-16">
+                    <div class="flex items-center gap-8">
+                        <a href="/" class="flex items-center gap-3 group">
+                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-redis-500 to-redis-700 flex items-center justify-center shadow-lg shadow-redis-500/25 group-hover:shadow-redis-500/40 transition-shadow">
+                                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2L2 7l10 5 10-5-10-5z" />
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 17l10 5 10-5" />
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2 12l10 5 10-5" />
+                                </svg>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-lg font-bold text-white">Redis Monitor</span>
+                                <span class="text-xs text-slate-500">Hot Shard Debugger</span>
+                            </div>
+                        </a>
+                        <div class="hidden md:flex items-center gap-1">
+                            <a href="/" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-700/50 transition-all">
+                                New Job
+                            </a>
+                            <a href="/jobs" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-700/50 transition-all">
+                                Jobs
+                            </a>
+                            <a href="/query" class="px-4 py-2 rounded-lg text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-700/50 transition-all">
+                                Query
+                            </a>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs font-mono text-slate-500 bg-slate-800/50 px-3 py-1.5 rounded-full border border-slate-700/50">
+                            ElastiCache Debugger
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            {% block content %}{% endblock %}
+        </main>
+
+        <!-- Footer -->
+        <footer class="border-t border-slate-800/50 mt-auto">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+                <p class="text-center text-sm text-slate-600">
+                    Redis Hot Shard Debugger — Debug uneven key distribution across ElastiCache shards
+                </p>
+            </div>
+        </footer>
+    </div>
+</body>
+</html>
+

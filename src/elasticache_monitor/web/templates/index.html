@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-8" x-data="{ showAdvanced: false }">
+    <!-- Header -->
+    <div class="text-center space-y-4">
+        <h1 class="text-4xl font-bold bg-gradient-to-r from-white via-redis-200 to-redis-400 bg-clip-text text-transparent">
+            Redis Hot Shard Debugger
+        </h1>
+        <p class="text-slate-400 max-w-2xl mx-auto">
+            Monitor your ElastiCache Redis cluster to identify hot shards and uneven key distribution. 
+            Uses the Redis MONITOR command to capture real-time command traffic.
+        </p>
+        
+        <!-- Animated Visualization -->
+        <div class="flex items-center justify-center gap-4 mt-8 mb-2">
+            <style>
+                @keyframes shard-pulse { 0%, 100% { transform: scale(1); opacity: 0.8; } 50% { transform: scale(1.05); opacity: 1; } }
+                @keyframes hot-shard { 0%, 100% { box-shadow: 0 0 15px rgba(220, 38, 38, 0.3); } 50% { box-shadow: 0 0 30px rgba(220, 38, 38, 0.6); } }
+                @keyframes data-flow { 0% { opacity: 0.3; transform: translateX(-4px); } 50% { opacity: 1; } 100% { opacity: 0.3; transform: translateX(4px); } }
+                .shard-normal { animation: shard-pulse 2.5s ease-in-out infinite; }
+                .shard-hot { animation: hot-shard 1.5s ease-in-out infinite; }
+                .data-dot { animation: data-flow 1s ease-in-out infinite; }
+            </style>
+            
+            <!-- Shards Visualization -->
+            <div class="flex flex-col gap-2">
+                <div class="shard-normal w-14 h-14 rounded-xl bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border border-emerald-500/30 flex items-center justify-center" title="Normal Shard">
+                    <span class="text-emerald-400 font-mono text-xs">0001</span>
+                </div>
+                <div class="shard-hot w-14 h-14 rounded-xl bg-gradient-to-br from-redis-500/30 to-orange-600/20 border border-redis-500/50 flex items-center justify-center" title="Hot Shard">
+                    <span class="text-redis-400 font-mono text-xs font-bold">0002</span>
+                </div>
+                <div class="shard-normal w-14 h-14 rounded-xl bg-gradient-to-br from-emerald-500/20 to-emerald-600/10 border border-emerald-500/30 flex items-center justify-center" style="animation-delay: 0.5s;" title="Normal Shard">
+                    <span class="text-emerald-400 font-mono text-xs">0003</span>
+                </div>
+            </div>
+            
+            <!-- Flow Arrows -->
+            <div class="flex items-center gap-1 text-slate-500">
+                <span class="data-dot" style="animation-delay: 0s;">•</span>
+                <span class="data-dot" style="animation-delay: 0.2s;">•</span>
+                <span class="data-dot" style="animation-delay: 0.4s;">•</span>
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                </svg>
+            </div>
+            
+            <!-- Monitor Hub -->
+            <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-redis-500/20 to-redis-600/10 border-2 border-redis-500/40 flex flex-col items-center justify-center gap-1">
+                <svg class="w-8 h-8 text-redis-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                <span class="text-[10px] text-slate-500">MONITOR</span>
+            </div>
+            
+            <!-- Flow Arrows -->
+            <div class="flex items-center gap-1 text-slate-500">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                </svg>
+                <span class="data-dot" style="animation-delay: 0s;">•</span>
+                <span class="data-dot" style="animation-delay: 0.2s;">•</span>
+                <span class="data-dot" style="animation-delay: 0.4s;">•</span>
+            </div>
+            
+            <!-- Analysis Output -->
+            <div class="flex flex-col gap-2">
+                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50">
+                    <span class="text-sm">📊</span>
+                    <span class="text-[11px] text-slate-400">Key Patterns</span>
+                </div>
+                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50">
+                    <span class="text-sm">🔥</span>
+                    <span class="text-[11px] text-slate-400">Hot Keys</span>
+                </div>
+                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50">
+                    <span class="text-sm">📦</span>
+                    <span class="text-[11px] text-slate-400">Key Sizes</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Labels -->
+        <div class="flex justify-center gap-20 text-[10px] text-slate-600 uppercase tracking-wider">
+            <span>Redis Shards</span>
+            <span>Analysis</span>
+            <span>Insights</span>
+        </div>
+    </div>
+
+    {% if error %}
+    <div class="glass-card rounded-xl p-4 border-l-4 border-redis-500 bg-redis-500/10">
+        <div class="flex items-center gap-3">
+            <svg class="w-5 h-5 text-redis-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="text-redis-200">{{ error }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+    <form action="/jobs/create" method="POST" autocomplete="off">
+        <!-- Main Configuration Card -->
+        <div class="glass-card glow-border rounded-2xl p-6 space-y-6">
+            <div class="flex items-center justify-between">
+                <h2 class="text-xl font-semibold text-white flex items-center gap-2">
+                    <svg class="w-5 h-5 text-redis-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                    </svg>
+                    New Monitoring Job
+                </h2>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Replication Group ID -->
+                <div class="space-y-2">
+                    <label for="replication_group_id" class="block text-sm font-medium text-slate-300">
+                        Replication Group ID <span class="text-redis-500">*</span>
+                    </label>
+                    <input type="text" 
+                           name="replication_group_id" 
+                           id="replication_group_id"
+                           list="replication_group_list"
+                           autocomplete="replication-group-id"
+                           data-1p-ignore
+                           data-lpignore="true"
+                           data-form-type="other"
+                           required
+                           placeholder="e.g., my-redis-cluster"
+                           class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50 transition-all">
+                    <datalist id="replication_group_list">
+                        {% for rg in prev_replication_groups %}
+                        <option value="{{ rg }}">
+                        {% endfor %}
+                    </datalist>
+                    <p class="text-xs text-slate-500">Your ElastiCache replication group identifier</p>
+                </div>
+
+                <!-- Password -->
+                <div class="space-y-2">
+                    <label for="redis_auth_token" class="block text-sm font-medium text-slate-300">
+                        Redis Password <span class="text-redis-500">*</span>
+                    </label>
+                    <input type="password" 
+                           name="password" 
+                           id="redis_auth_token"
+                           autocomplete="off"
+                           readonly
+                           onfocus="this.removeAttribute('readonly')"
+                           data-1p-ignore="true"
+                           data-lpignore="true"
+                           data-form-type="other"
+                           data-bwignore
+                           required
+                           placeholder="Enter Redis AUTH token"
+                           class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50 transition-all">
+                    <p class="text-xs text-slate-500">AUTH password (not stored, used only during monitoring)</p>
+                </div>
+
+                <!-- Endpoint Type -->
+                <div class="space-y-2">
+                    <label for="endpoint_type" class="block text-sm font-medium text-slate-300">
+                        Endpoint Type
+                    </label>
+                    <select name="endpoint_type" 
+                            id="endpoint_type"
+                            class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50 transition-all">
+                        <option value="replica" selected>Replica (Recommended)</option>
+                        <option value="primary">Primary (Use with caution)</option>
+                    </select>
+                    <p class="text-xs text-slate-500">Replicas are safer for production monitoring</p>
+                </div>
+
+                <!-- Duration -->
+                <div class="space-y-2">
+                    <label for="duration" class="block text-sm font-medium text-slate-300">
+                        Duration (seconds)
+                    </label>
+                    <select name="duration" 
+                            id="duration"
+                            class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50 transition-all">
+                        <option value="30">30 seconds</option>
+                        <option value="60" selected>1 minute</option>
+                        <option value="120">2 minutes</option>
+                        <option value="300">5 minutes</option>
+                        <option value="600">10 minutes</option>
+                    </select>
+                    <p class="text-xs text-slate-500">How long to run the MONITOR command</p>
+                </div>
+            </div>
+
+            <!-- Advanced Options Toggle -->
+            <div class="pt-4 border-t border-slate-700/50">
+                <button type="button" 
+                        @click="showAdvanced = !showAdvanced"
+                        class="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors">
+                    <svg class="w-4 h-4 transition-transform" :class="showAdvanced ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                    Advanced Options
+                </button>
+                
+                <div x-show="showAdvanced" x-cloak class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Region -->
+                    <div class="space-y-2">
+                        <label for="region" class="block text-sm font-medium text-slate-300">
+                            AWS Region
+                        </label>
+                        <input type="text" 
+                               name="region" 
+                               id="region"
+                               value="ap-south-1"
+                               placeholder="ap-south-1"
+                               class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50 transition-all">
+                    </div>
+
+                    <!-- Job Name -->
+                    <div class="space-y-2">
+                        <label for="job_name" class="block text-sm font-medium text-slate-300">
+                            Job Name <span class="text-slate-500">(optional)</span>
+                        </label>
+                        <input type="text" 
+                               name="job_name" 
+                               id="job_name"
+                               list="job_name_list"
+                               autocomplete="job-name"
+                               data-1p-ignore
+                               data-lpignore="true"
+                               data-form-type="other"
+                               placeholder="e.g., Production Load Test"
+                               class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50 transition-all">
+                        <datalist id="job_name_list">
+                            {% for name in prev_job_names %}
+                            <option value="{{ name }}">
+                            {% endfor %}
+                        </datalist>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Submit Button -->
+        <div class="flex justify-center pt-6">
+            <button type="submit"
+                    class="group relative px-8 py-4 rounded-xl font-semibold text-white bg-gradient-to-r from-redis-500 to-redis-600 hover:from-redis-400 hover:to-redis-500 shadow-lg shadow-redis-500/25 hover:shadow-redis-500/40 transition-all duration-200">
+                <span class="flex items-center gap-3">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Start Monitoring
+                </span>
+            </button>
+        </div>
+    </form>
+
+    <!-- Recent Jobs -->
+    {% if recent_jobs %}
+    <div class="glass-card rounded-2xl p-6 space-y-4">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Recent Jobs
+        </h3>
+        <div class="space-y-2">
+            {% for job in recent_jobs %}
+            <a href="/jobs/{{ job.id }}" class="flex items-center justify-between p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 transition-all group">
+                <div class="flex items-center gap-3">
+                    {% if job.status.value == 'completed' %}
+                    <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    {% elif job.status.value == 'running' %}
+                    <span class="w-2 h-2 rounded-full bg-amber-400 status-pulse"></span>
+                    {% elif job.status.value == 'failed' %}
+                    <span class="w-2 h-2 rounded-full bg-redis-400"></span>
+                    {% else %}
+                    <span class="w-2 h-2 rounded-full bg-slate-400"></span>
+                    {% endif %}
+                    <div>
+                        <span class="text-white font-medium">{{ job.name or job.replication_group_id }}</span>
+                        <span class="text-xs text-slate-500 ml-2">{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-mono text-slate-500">{{ job.total_commands|format_number }} cmds</span>
+                    <svg class="w-4 h-4 text-slate-600 group-hover:text-slate-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        <a href="/jobs" class="inline-flex items-center gap-1 text-sm text-redis-400 hover:text-redis-300 transition-colors">
+            View all jobs
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+            </svg>
+        </a>
+    </div>
+    {% endif %}
+
+    <!-- How It Works -->
+    <div class="glass-card rounded-2xl p-6 space-y-4">
+        <h3 class="text-sm font-semibold text-slate-400 uppercase tracking-wider">How It Works</h3>
+        <div class="code-block rounded-xl p-4 font-mono text-sm space-y-2">
+            <div class="flex items-start gap-3">
+                <span class="text-redis-400 font-bold">1.</span>
+                <span class="text-slate-300">Discovers all shard endpoints via AWS ElastiCache API</span>
+            </div>
+            <div class="flex items-start gap-3">
+                <span class="text-redis-400 font-bold">2.</span>
+                <span class="text-slate-300">Runs <code class="text-emerald-350 bg-slate-800 px-1.5 py-0.5 rounded">MONITOR</code> command on each shard simultaneously</span>
+            </div>
+            <div class="flex items-start gap-3">
+                <span class="text-redis-400 font-bold">3.</span>
+                <span class="text-slate-300">Captures all Redis commands, keys, and client information</span>
+            </div>
+            <div class="flex items-start gap-3">
+                <span class="text-redis-400 font-bold">4.</span>
+                <span class="text-slate-300">Stores data in SQLite for advanced querying and analysis</span>
+            </div>
+            <div class="flex items-start gap-3">
+                <span class="text-redis-400 font-bold">5.</span>
+                <span class="text-slate-300">Identifies hot keys, patterns, and uneven shard distribution</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

@@ -507,6 +507,51 @@ def _run_monitoring(config):
 
 
 @click.command()
+@click.option('--host', '-h', default='0.0.0.0',
+              help='Host to bind to (default: 0.0.0.0)')
+@click.option('--port', '-p', default=8080, type=int,
+              help='Port to listen on (default: 8080)')
+@click.option('--reload', is_flag=True,
+              help='Enable auto-reload for development')
+def web_server(host, port, reload):
+    """
+    🌐 Start the Web UI for Redis Monitor
+    
+    Launch a browser-based interface for monitoring and analyzing
+    Redis/ElastiCache clusters.
+    
+    Examples:
+    
+    \b
+    # Start on default port 8080
+    elasticache-web
+    
+    \b
+    # Start on custom port with auto-reload
+    elasticache-web -p 3000 --reload
+    """
+    import uvicorn
+    
+    print(f"{Fore.GREEN}{'='*80}")
+    print(f"{Fore.GREEN}🌐 REDIS HOT SHARD DEBUGGER - WEB UI")
+    print(f"{Fore.GREEN}{'='*80}\n")
+    
+    print(f"{Fore.CYAN}Starting web server...")
+    print(f"  Host: {host}")
+    print(f"  Port: {port}")
+    print(f"  URL:  {Fore.GREEN}http://localhost:{port}")
+    print()
+    
+    uvicorn.run(
+        "elasticache_monitor.web:app",
+        host=host,
+        port=port,
+        reload=reload,
+        log_level="info"
+    )
+
+
+@click.command()
 @click.option('--db-path', default='./reports/monitor_logs.db',
               help='Path to SQLite database (default: ./reports/monitor_logs.db)')
 @click.option('--session', '-s', type=int,

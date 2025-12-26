@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-8" x-data="{ activeTab: '{{ tab }}' }">
+    <!-- Breadcrumb -->
+    <nav class="flex items-center gap-2 text-sm">
+        <a href="/jobs" class="text-slate-400 hover:text-white transition-colors">Jobs</a>
+        <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        <a href="/jobs/{{ job.id }}" class="text-slate-400 hover:text-white transition-colors">
+            {{ job.name or job.id[:8] }}
+        </a>
+        <svg class="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+        <span class="text-white">{{ shard.shard_name }}</span>
+    </nav>
+
+    <!-- Header -->
+    <div class="glass-card glow-border rounded-2xl p-6">
+        <div class="flex items-start justify-between">
+            <div class="space-y-2">
+                <h1 class="text-2xl font-bold text-white flex items-center gap-3">
+                    <svg class="w-6 h-6 text-redis-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+                    </svg>
+                    {{ shard.shard_name }}
+                </h1>
+                <div class="flex items-center gap-4 text-sm text-slate-400">
+                    <span class="font-mono">{{ shard.host }}:{{ shard.port }}</span>
+                    <span class="px-2 py-0.5 rounded bg-slate-700/50 text-xs">{{ shard.role }}</span>
+                </div>
+            </div>
+            <div class="text-right">
+                <div class="text-3xl font-bold text-white">{{ shard.command_count|format_number }}</div>
+                <div class="text-sm text-slate-500">Commands Captured</div>
+                <div class="text-lg font-mono text-slate-400 mt-1">{{ "%.1f"|format(shard.qps) }} QPS</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-2 border-b border-slate-700/50 pb-2">
+        <button @click="activeTab = 'overview'" 
+                :class="activeTab === 'overview' ? 'bg-redis-500/20 text-redis-400 border-redis-500/50' : 'bg-slate-800/30 text-slate-400 border-transparent hover:text-white'"
+                class="px-4 py-2 rounded-lg text-sm font-medium border transition-all">
+            Overview
+        </button>
+        <button @click="activeTab = 'keys'" 
+                :class="activeTab === 'keys' ? 'bg-redis-500/20 text-redis-400 border-redis-500/50' : 'bg-slate-800/30 text-slate-400 border-transparent hover:text-white'"
+                class="px-4 py-2 rounded-lg text-sm font-medium border transition-all">
+            Top Keys
+        </button>
+        <button @click="activeTab = 'patterns'" 
+                :class="activeTab === 'patterns' ? 'bg-redis-500/20 text-redis-400 border-redis-500/50' : 'bg-slate-800/30 text-slate-400 border-transparent hover:text-white'"
+                class="px-4 py-2 rounded-lg text-sm font-medium border transition-all">
+            Key Patterns
+        </button>
+        <button @click="activeTab = 'commands'" 
+                :class="activeTab === 'commands' ? 'bg-redis-500/20 text-redis-400 border-redis-500/50' : 'bg-slate-800/30 text-slate-400 border-transparent hover:text-white'"
+                class="px-4 py-2 rounded-lg text-sm font-medium border transition-all">
+            Recent Commands
+        </button>
+    </div>
+
+    <!-- Overview Tab -->
+    <div x-show="activeTab === 'overview'" class="space-y-6">
+        <!-- Command Distribution -->
+        <div class="glass-card rounded-xl p-6">
+            <h3 class="text-lg font-semibold text-white mb-4">Command Distribution</h3>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {% for cmd, count in command_dist %}
+                <div class="bg-slate-800/30 rounded-lg p-4">
+                    <div class="text-xl font-bold text-white">{{ count|format_number }}</div>
+                    <div class="text-sm font-mono text-slate-400">{{ cmd }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Chart -->
+        <div class="glass-card rounded-xl p-6">
+            <h3 class="text-lg font-semibold text-white mb-4">Command Types</h3>
+            <div class="h-64">
+                <canvas id="cmdChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Top Keys Tab -->
+    <div x-show="activeTab === 'keys'" class="glass-card rounded-xl overflow-hidden" x-data="topKeysTable()">
+        <div class="px-6 py-4 border-b border-slate-700/50">
+            <h3 class="text-lg font-semibold text-white">Top Keys</h3>
+            <p class="text-sm text-slate-500">Most frequently accessed keys in this shard</p>
+        </div>
+        
+        {% if top_keys %}
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-slate-700/50 text-left text-sm text-slate-400">
+                        <th class="px-6 py-3 font-medium cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('key')">
+                            <div class="flex items-center gap-1">
+                                Key
+                                <svg x-show="sortKey === 'key'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="px-6 py-3 font-medium text-right cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('count')">
+                            <div class="flex items-center justify-end gap-1">
+                                Access Count
+                                <svg x-show="sortKey === 'count'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="px-6 py-3 font-medium text-right cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('size')">
+                            <div class="flex items-center justify-end gap-1">
+                                Size
+                                <svg x-show="sortKey === 'size'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="item in sortedData" :key="item.key">
+                        <tr class="border-b border-slate-800/50 hover:bg-slate-800/30">
+                            <td class="px-6 py-4">
+                                <div class="font-mono text-sm text-white max-w-lg truncate" :title="item.key" x-text="item.key"></div>
+                            </td>
+                            <td class="px-6 py-4 text-right">
+                                <span class="font-mono text-white" x-text="formatNumber(item.count)"></span>
+                            </td>
+                            <td class="px-6 py-4 text-right">
+                                <span class="font-mono" :class="item.size ? 'text-emerald-400' : 'text-slate-600'" x-text="formatBytes(item.size)"></span>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-8 text-center text-slate-400">No keys captured</div>
+        {% endif %}
+    </div>
+
+    <!-- Key Patterns Tab -->
+    <div x-show="activeTab === 'patterns'" class="glass-card rounded-xl overflow-hidden" x-data="topPatternsTable()">
+        <div class="px-6 py-4 border-b border-slate-700/50">
+            <h3 class="text-lg font-semibold text-white">Key Patterns</h3>
+            <p class="text-sm text-slate-500">Grouped patterns help identify application-level access patterns</p>
+        </div>
+        
+        {% if top_patterns %}
+        <div class="overflow-x-auto">
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-slate-700/50 text-left text-sm text-slate-400">
+                        <th class="px-6 py-3 font-medium cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('pattern')">
+                            <div class="flex items-center gap-1">
+                                Pattern
+                                <svg x-show="sortKey === 'pattern'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="px-6 py-3 font-medium text-right cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('count')">
+                            <div class="flex items-center justify-end gap-1">
+                                Count
+                                <svg x-show="sortKey === 'count'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="px-6 py-3 font-medium text-right cursor-pointer hover:text-white transition-colors select-none" @click="toggleSort('avg_size')">
+                            <div class="flex items-center justify-end gap-1">
+                                Avg Size
+                                <svg x-show="sortKey === 'avg_size'" class="w-4 h-4" :class="sortDir === 'asc' ? '' : 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                                </svg>
+                            </div>
+                        </th>
+                        <th class="px-6 py-3 font-medium">Distribution</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="item in sortedData" :key="item.pattern">
+                        <tr class="border-b border-slate-800/50 hover:bg-slate-800/30">
+                            <td class="px-6 py-4">
+                                <div class="font-mono text-sm text-white" x-text="item.pattern"></div>
+                            </td>
+                            <td class="px-6 py-4 text-right">
+                                <span class="font-mono text-white" x-text="formatNumber(item.count)"></span>
+                            </td>
+                            <td class="px-6 py-4 text-right">
+                                <span class="font-mono" :class="item.avg_size ? 'text-slate-400' : 'text-slate-600'" x-text="formatBytes(item.avg_size)"></span>
+                            </td>
+                            <td class="px-6 py-4">
+                                <div class="w-32 h-2 bg-slate-800 rounded-full overflow-hidden">
+                                    <div class="h-full bg-redis-500 rounded-full transition-all" :style="'width: ' + (item.count / maxCount * 100) + '%'"></div>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-8 text-center text-slate-400">No patterns identified</div>
+        {% endif %}
+    </div>
+
+    <!-- Recent Commands Tab -->
+    <div x-show="activeTab === 'commands'" class="glass-card rounded-xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-700/50">
+            <h3 class="text-lg font-semibold text-white">Recent Commands</h3>
+            <p class="text-sm text-slate-500">Last 100 commands captured from this shard</p>
+        </div>
+        
+        {% if recent_commands %}
+        <div class="overflow-x-auto max-h-96 overflow-y-auto">
+            <table class="w-full">
+                <thead class="sticky top-0 bg-slate-900">
+                    <tr class="border-b border-slate-700/50 text-left text-sm text-slate-400">
+                        <th class="px-6 py-3 font-medium">Time</th>
+                        <th class="px-6 py-3 font-medium">Command</th>
+                        <th class="px-6 py-3 font-medium">Key</th>
+                        <th class="px-6 py-3 font-medium">Client</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cmd in recent_commands %}
+                    <tr class="border-b border-slate-800/50 hover:bg-slate-800/30 text-sm">
+                        <td class="px-6 py-2 font-mono text-slate-500 whitespace-nowrap">
+                            {{ cmd.datetime_utc[11:19] }}
+                        </td>
+                        <td class="px-6 py-2">
+                            <span class="px-2 py-0.5 rounded bg-slate-700/50 text-emerald-400 font-mono text-xs">
+                                {{ cmd.command }}
+                            </span>
+                        </td>
+                        <td class="px-6 py-2 font-mono text-white max-w-md truncate" title="{{ cmd.key }}">
+                            {{ cmd.key or '—' }}
+                        </td>
+                        <td class="px-6 py-2 font-mono text-slate-500 text-xs">
+                            {{ cmd.client_ip or '—' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="p-8 text-center text-slate-400">No commands captured</div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    // Data for sortable tables
+    window.topKeysData = [
+        {% for key, count, size in top_keys %}
+        { key: {{ key | tojson | safe }}, count: {{ count }}, size: {{ size or 0 }} }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
+    
+    window.topPatternsData = [
+        {% for pattern, count, avg_size in top_patterns %}
+        { pattern: {{ pattern | tojson | safe }}, count: {{ count }}, avg_size: {{ avg_size or 0 }} }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
+    
+    // Top Keys Table Component
+    function topKeysTable() {
+        return {
+            sortKey: 'count',
+            sortDir: 'desc',
+            rawData: window.topKeysData || [],
+            get sortedData() {
+                const data = [...this.rawData];
+                const key = this.sortKey;
+                const dir = this.sortDir === 'asc' ? 1 : -1;
+                return data.sort((a, b) => {
+                    if (key === 'key') return dir * String(a.key).localeCompare(String(b.key));
+                    return dir * ((a[key] || 0) - (b[key] || 0));
+                });
+            },
+            toggleSort(key) {
+                if (this.sortKey === key) {
+                    this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.sortKey = key;
+                    this.sortDir = key === 'key' ? 'asc' : 'desc';
+                }
+            },
+            formatNumber(n) { return n ? n.toLocaleString() : '0'; },
+            formatBytes(bytes) {
+                if (!bytes) return '—';
+                const units = ['B', 'KB', 'MB', 'GB'];
+                let i = 0;
+                while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+                return bytes.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+            }
+        };
+    }
+    
+    // Top Patterns Table Component
+    function topPatternsTable() {
+        return {
+            sortKey: 'count',
+            sortDir: 'desc',
+            rawData: window.topPatternsData || [],
+            get sortedData() {
+                const data = [...this.rawData];
+                const key = this.sortKey;
+                const dir = this.sortDir === 'asc' ? 1 : -1;
+                return data.sort((a, b) => {
+                    if (key === 'pattern') return dir * String(a.pattern).localeCompare(String(b.pattern));
+                    return dir * ((a[key] || 0) - (b[key] || 0));
+                });
+            },
+            get maxCount() {
+                return this.sortedData.length > 0 ? Math.max(...this.sortedData.map(d => d.count)) : 1;
+            },
+            toggleSort(key) {
+                if (this.sortKey === key) {
+                    this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+                } else {
+                    this.sortKey = key;
+                    this.sortDir = key === 'pattern' ? 'asc' : 'desc';
+                }
+            },
+            formatNumber(n) { return n ? n.toLocaleString() : '0'; },
+            formatBytes(bytes) {
+                if (!bytes) return '—';
+                const units = ['B', 'KB', 'MB', 'GB'];
+                let i = 0;
+                while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
+                return '~' + bytes.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+            }
+        };
+    }
+
+    // Command distribution chart
+    const cmdCtx = document.getElementById('cmdChart');
+    if (cmdCtx) {
+        new Chart(cmdCtx.getContext('2d'), {
+            type: 'doughnut',
+            data: {
+                labels: [{% for cmd, count in command_dist %}'{{ cmd }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+                datasets: [{
+                    data: [{% for cmd, count in command_dist %}{{ count }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                    backgroundColor: [
+                        'rgba(220, 38, 38, 0.7)',
+                        'rgba(249, 115, 22, 0.7)',
+                        'rgba(234, 179, 8, 0.7)',
+                        'rgba(16, 185, 129, 0.7)',
+                        'rgba(59, 130, 246, 0.7)',
+                        'rgba(139, 92, 246, 0.7)',
+                        'rgba(236, 72, 153, 0.7)',
+                        'rgba(148, 163, 184, 0.7)',
+                        'rgba(100, 116, 139, 0.7)',
+                        'rgba(71, 85, 105, 0.7)'
+                    ],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#94a3b8' }
+                    }
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}
+
