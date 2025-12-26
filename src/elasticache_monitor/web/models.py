@@ -97,6 +97,13 @@ class RedisCommand(Base):
     
     args_json = Column(Text, nullable=True)  # JSON array of arguments
     raw_line = Column(Text, nullable=True)
+    
+    # Composite indexes for faster aggregation queries
+    from sqlalchemy import Index
+    __table_args__ = (
+        Index('ix_redis_commands_job_shard_cmd', 'job_id', 'shard_name', 'command'),
+        Index('ix_redis_commands_job_pattern', 'job_id', 'key_pattern'),
+    )
 
 
 class KeySizeCache(Base):
