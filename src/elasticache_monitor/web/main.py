@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, text
 from pathlib import Path
 
-from .db import init_db, get_db
+from .db import init_db, get_db, get_job_db_context, delete_job_db, job_db_exists, get_job_db_path
 from .models import MonitorJob, MonitorShard, RedisCommand, KeySizeCache, JobStatus, ShardStatus
 from .runner import run_monitoring_job, sample_key_sizes
 
@@ -281,68 +281,64 @@ async def job_detail(request: Request, job_id: str, db: Session = Depends(get_db
     cmd_types = []
     top_patterns = []
     
-    if job.status.value == 'completed':
+    if job.status.value == 'completed' and job_db_exists(job_id):
         from sqlalchemy import func
         
-        # Get all command types used
-        cmd_types_raw = db.query(RedisCommand.command).filter(
-            RedisCommand.job_id == job_id
-        ).distinct().all()
-        cmd_types = sorted([c[0] for c in cmd_types_raw if c[0]])
-        
-        # Get command counts per shard
-        shard_cmd_data = db.query(
-            RedisCommand.shard_name,
-            RedisCommand.command,
-            func.count(RedisCommand.id).label('count')
-        ).filter(
-            RedisCommand.job_id == job_id
-        ).group_by(
-            RedisCommand.shard_name,
-            RedisCommand.command
-        ).all()
-        
-        # Organize data: {shard_name: {command: count}}
-        for row in shard_cmd_data:
-            shard_name, cmd, count = row
-            if shard_name not in command_by_shard:
-                command_by_shard[shard_name] = {}
-            command_by_shard[shard_name][cmd] = count
-        
-        # Get top 10 key patterns overall
-        top_patterns_raw = db.query(
-            RedisCommand.key_pattern,
-            func.count(RedisCommand.id).label('count')
-        ).filter(
-            RedisCommand.job_id == job_id,
-            RedisCommand.key_pattern.isnot(None)
-        ).group_by(
-            RedisCommand.key_pattern
-        ).order_by(
-            func.count(RedisCommand.id).desc()
-        ).limit(10).all()
-        top_patterns = [p[0] for p in top_patterns_raw if p[0]]
-        
-        # Get pattern counts per shard (for top patterns only)
-        if top_patterns:
-            shard_pattern_data = db.query(
+        # Query from job-specific database
+        with get_job_db_context(job_id) as job_db:
+            # Get all command types used
+            cmd_types_raw = job_db.query(RedisCommand.command).distinct().all()
+            cmd_types = sorted([c[0] for c in cmd_types_raw if c[0]])
+            
+            # Get command counts per shard
+            shard_cmd_data = job_db.query(
                 RedisCommand.shard_name,
+                RedisCommand.command,
+                func.count(RedisCommand.id).label('count')
+            ).group_by(
+                RedisCommand.shard_name,
+                RedisCommand.command
+            ).all()
+            
+            # Organize data: {shard_name: {command: count}}
+            for row in shard_cmd_data:
+                shard_name, cmd, count = row
+                if shard_name not in command_by_shard:
+                    command_by_shard[shard_name] = {}
+                command_by_shard[shard_name][cmd] = count
+            
+            # Get top 10 key patterns overall
+            top_patterns_raw = job_db.query(
                 RedisCommand.key_pattern,
                 func.count(RedisCommand.id).label('count')
             ).filter(
-                RedisCommand.job_id == job_id,
-                RedisCommand.key_pattern.in_(top_patterns)
+                RedisCommand.key_pattern.isnot(None)
             ).group_by(
-                RedisCommand.shard_name,
                 RedisCommand.key_pattern
-            ).all()
+            ).order_by(
+                func.count(RedisCommand.id).desc()
+            ).limit(10).all()
+            top_patterns = [p[0] for p in top_patterns_raw if p[0]]
             
-            # Organize: {shard_name: {pattern: count}}
-            for row in shard_pattern_data:
-                shard_name, pattern, count = row
-                if shard_name not in pattern_by_shard:
-                    pattern_by_shard[shard_name] = {}
-                pattern_by_shard[shard_name][pattern] = count
+            # Get pattern counts per shard (for top patterns only)
+            if top_patterns:
+                shard_pattern_data = job_db.query(
+                    RedisCommand.shard_name,
+                    RedisCommand.key_pattern,
+                    func.count(RedisCommand.id).label('count')
+                ).filter(
+                    RedisCommand.key_pattern.in_(top_patterns)
+                ).group_by(
+                    RedisCommand.shard_name,
+                    RedisCommand.key_pattern
+                ).all()
+                
+                # Organize: {shard_name: {pattern: count}}
+                for row in shard_pattern_data:
+                    shard_name, pattern, count = row
+                    if shard_name not in pattern_by_shard:
+                        pattern_by_shard[shard_name] = {}
+                    pattern_by_shard[shard_name][pattern] = count
     
     return templates.TemplateResponse("job_detail.html", {
         "request": request,
@@ -380,133 +376,144 @@ async def job_analysis(
             "page_title": "Error"
         }, status_code=404)
     
-    # Build base query
-    base_filter = [RedisCommand.job_id == job_id]
-    
-    if shard_filter:
-        base_filter.append(RedisCommand.shard_name == shard_filter)
-    
-    if command_filter:
-        base_filter.append(RedisCommand.command == command_filter.upper())
-    
-    # Get available shards for filter dropdown
+    # Get available shards for filter dropdown (from metadata DB)
     shards = db.query(MonitorShard).filter(MonitorShard.job_id == job_id).all()
     
-    # Get available commands for filter dropdown
-    commands = db.query(RedisCommand.command).filter(
-        RedisCommand.job_id == job_id
-    ).distinct().all()
-    commands = sorted([c[0] for c in commands])
+    # Initialize defaults
+    commands = []
+    analysis_data = []
+    total_commands = 0
+    unique_keys = 0
+    unique_patterns = 0
     
-    # Group by analysis
-    if group_by == "key_pattern":
-        results = db.query(
-            RedisCommand.key_pattern,
-            func.count(RedisCommand.id).label('count'),
-            func.avg(RedisCommand.key_size_bytes).label('avg_size'),
-            func.sum(RedisCommand.key_size_bytes).label('total_size')
-        ).filter(*base_filter).filter(
-            RedisCommand.key_pattern.isnot(None)
-        ).group_by(
-            RedisCommand.key_pattern
-        ).order_by(
-            desc('count')
-        ).limit(limit).all()
-        
-        analysis_data = [{
-            'name': r[0],
-            'count': r[1],
-            'avg_size': r[2],
-            'total_size': r[3]
-        } for r in results]
-    
-    elif group_by == "shard":
-        results = db.query(
-            RedisCommand.shard_name,
-            func.count(RedisCommand.id).label('count'),
-            func.sum(RedisCommand.key_size_bytes).label('total_size')
-        ).filter(*base_filter).group_by(
-            RedisCommand.shard_name
-        ).order_by(
-            desc('count')
-        ).limit(limit).all()
-        
-        analysis_data = [{
-            'name': r[0],
-            'count': r[1],
-            'total_size': r[2]
-        } for r in results]
-    
-    elif group_by == "command":
-        results = db.query(
-            RedisCommand.command,
-            func.count(RedisCommand.id).label('count')
-        ).filter(*base_filter).group_by(
-            RedisCommand.command
-        ).order_by(
-            desc('count')
-        ).limit(limit).all()
-        
-        analysis_data = [{
-            'name': r[0],
-            'count': r[1]
-        } for r in results]
-    
-    elif group_by == "client_ip":
-        results = db.query(
-            RedisCommand.client_ip,
-            func.count(RedisCommand.id).label('count')
-        ).filter(*base_filter).filter(
-            RedisCommand.client_ip.isnot(None)
-        ).group_by(
-            RedisCommand.client_ip
-        ).order_by(
-            desc('count')
-        ).limit(limit).all()
-        
-        analysis_data = [{
-            'name': r[0],
-            'count': r[1]
-        } for r in results]
-    
-    elif group_by == "key":
-        # Individual keys with sizes
-        results = db.query(
-            RedisCommand.key,
-            RedisCommand.shard_name,
-            func.count(RedisCommand.id).label('count'),
-            func.max(RedisCommand.key_size_bytes).label('size')
-        ).filter(*base_filter).filter(
-            RedisCommand.key.isnot(None)
-        ).group_by(
-            RedisCommand.key,
-            RedisCommand.shard_name
-        ).order_by(
-            desc('count')
-        ).limit(limit).all()
-        
-        analysis_data = [{
-            'name': r[0],
-            'shard': r[1],
-            'count': r[2],
-            'size': r[3]
-        } for r in results]
-    
-    else:
-        analysis_data = []
-    
-    # Get overall stats
-    total_commands = db.query(func.count(RedisCommand.id)).filter(
-        RedisCommand.job_id == job_id
-    ).scalar() or 0
-    
-    unique_keys = db.query(func.count(func.distinct(RedisCommand.key))).filter(
-        RedisCommand.job_id == job_id
-    ).scalar() or 0
-    
-    unique_patterns = db.query(func.count(func.distinct(RedisCommand.key_pattern))).filter(
-        RedisCommand.job_id == job_id
-    ).scalar() or 0
+    # Query from job-specific database if it exists
+    if job_db_exists(job_id):
+        with get_job_db_context(job_id) as job_db:
+            # Build base filter (no job_id needed - per-job DB)
+            base_filter = []
+            
+            if shard_filter:
+                base_filter.append(RedisCommand.shard_name == shard_filter)
+            
+            if command_filter:
+                base_filter.append(RedisCommand.command == command_filter.upper())
+            
+            # Get available commands for filter dropdown
+            commands_raw = job_db.query(RedisCommand.command).distinct().all()
+            commands = sorted([c[0] for c in commands_raw if c[0]])
+            
+            # Group by analysis
+            if group_by == "key_pattern":
+                query = job_db.query(
+                    RedisCommand.key_pattern,
+                    func.count(RedisCommand.id).label('count'),
+                    func.avg(RedisCommand.key_size_bytes).label('avg_size'),
+                    func.sum(RedisCommand.key_size_bytes).label('total_size')
+                )
+                if base_filter:
+                    query = query.filter(*base_filter)
+                results = query.filter(
+                    RedisCommand.key_pattern.isnot(None)
+                ).group_by(
+                    RedisCommand.key_pattern
+                ).order_by(
+                    desc('count')
+                ).limit(limit).all()
+                
+                analysis_data = [{
+                    'name': r[0],
+                    'count': r[1],
+                    'avg_size': r[2],
+                    'total_size': r[3]
+                } for r in results]
+            
+            elif group_by == "shard":
+                query = job_db.query(
+                    RedisCommand.shard_name,
+                    func.count(RedisCommand.id).label('count'),
+                    func.sum(RedisCommand.key_size_bytes).label('total_size')
+                )
+                if base_filter:
+                    query = query.filter(*base_filter)
+                results = query.group_by(
+                    RedisCommand.shard_name
+                ).order_by(
+                    desc('count')
+                ).limit(limit).all()
+                
+                analysis_data = [{
+                    'name': r[0],
+                    'count': r[1],
+                    'total_size': r[2]
+                } for r in results]
+            
+            elif group_by == "command":
+                query = job_db.query(
+                    RedisCommand.command,
+                    func.count(RedisCommand.id).label('count')
+                )
+                if base_filter:
+                    query = query.filter(*base_filter)
+                results = query.group_by(
+                    RedisCommand.command
+                ).order_by(
+                    desc('count')
+                ).limit(limit).all()
+                
+                analysis_data = [{
+                    'name': r[0],
+                    'count': r[1]
+                } for r in results]
+            
+            elif group_by == "client_ip":
+                query = job_db.query(
+                    RedisCommand.client_ip,
+                    func.count(RedisCommand.id).label('count')
+                )
+                if base_filter:
+                    query = query.filter(*base_filter)
+                results = query.filter(
+                    RedisCommand.client_ip.isnot(None)
+                ).group_by(
+                    RedisCommand.client_ip
+                ).order_by(
+                    desc('count')
+                ).limit(limit).all()
+                
+                analysis_data = [{
+                    'name': r[0],
+                    'count': r[1]
+                } for r in results]
+            
+            elif group_by == "key":
+                query = job_db.query(
+                    RedisCommand.key,
+                    RedisCommand.shard_name,
+                    func.count(RedisCommand.id).label('count'),
+                    func.max(RedisCommand.key_size_bytes).label('size')
+                )
+                if base_filter:
+                    query = query.filter(*base_filter)
+                results = query.filter(
+                    RedisCommand.key.isnot(None)
+                ).group_by(
+                    RedisCommand.key,
+                    RedisCommand.shard_name
+                ).order_by(
+                    desc('count')
+                ).limit(limit).all()
+                
+                analysis_data = [{
+                    'name': r[0],
+                    'shard': r[1],
+                    'count': r[2],
+                    'size': r[3]
+                } for r in results]
+            
+            # Get overall stats
+            total_commands = job_db.query(func.count(RedisCommand.id)).scalar() or 0
+            unique_keys = job_db.query(func.count(func.distinct(RedisCommand.key))).scalar() or 0
+            unique_patterns = job_db.query(func.count(func.distinct(RedisCommand.key_pattern))).scalar() or 0
     
     return templates.TemplateResponse("analysis.html", {
         "request": request,
@@ -551,56 +558,61 @@ async def shard_detail(
             "page_title": "Error"
         }, status_code=404)
     
-    # Get command distribution
-    command_dist = db.query(
-        RedisCommand.command,
-        func.count(RedisCommand.id).label('count')
-    ).filter(
-        RedisCommand.job_id == job_id,
-        RedisCommand.shard_name == shard_name
-    ).group_by(
-        RedisCommand.command
-    ).order_by(
-        desc('count')
-    ).limit(10).all()
+    # Initialize defaults
+    command_dist = []
+    top_patterns = []
+    top_keys = []
+    recent_commands = []
     
-    # Get top key patterns
-    top_patterns = db.query(
-        RedisCommand.key_pattern,
-        func.count(RedisCommand.id).label('count'),
-        func.avg(RedisCommand.key_size_bytes).label('avg_size')
-    ).filter(
-        RedisCommand.job_id == job_id,
-        RedisCommand.shard_name == shard_name,
-        RedisCommand.key_pattern.isnot(None)
-    ).group_by(
-        RedisCommand.key_pattern
-    ).order_by(
-        desc('count')
-    ).limit(20).all()
-    
-    # Get top individual keys
-    top_keys = db.query(
-        RedisCommand.key,
-        func.count(RedisCommand.id).label('count'),
-        func.max(RedisCommand.key_size_bytes).label('size')
-    ).filter(
-        RedisCommand.job_id == job_id,
-        RedisCommand.shard_name == shard_name,
-        RedisCommand.key.isnot(None)
-    ).group_by(
-        RedisCommand.key
-    ).order_by(
-        desc('count')
-    ).limit(30).all()
-    
-    # Get recent commands
-    recent_commands = db.query(RedisCommand).filter(
-        RedisCommand.job_id == job_id,
-        RedisCommand.shard_name == shard_name
-    ).order_by(
-        desc(RedisCommand.timestamp)
-    ).limit(100).all()
+    # Query from job-specific database
+    if job_db_exists(job_id):
+        with get_job_db_context(job_id) as job_db:
+            # Get command distribution
+            command_dist = job_db.query(
+                RedisCommand.command,
+                func.count(RedisCommand.id).label('count')
+            ).filter(
+                RedisCommand.shard_name == shard_name
+            ).group_by(
+                RedisCommand.command
+            ).order_by(
+                desc('count')
+            ).limit(10).all()
+            
+            # Get top key patterns
+            top_patterns = job_db.query(
+                RedisCommand.key_pattern,
+                func.count(RedisCommand.id).label('count'),
+                func.avg(RedisCommand.key_size_bytes).label('avg_size')
+            ).filter(
+                RedisCommand.shard_name == shard_name,
+                RedisCommand.key_pattern.isnot(None)
+            ).group_by(
+                RedisCommand.key_pattern
+            ).order_by(
+                desc('count')
+            ).limit(20).all()
+            
+            # Get top individual keys
+            top_keys = job_db.query(
+                RedisCommand.key,
+                func.count(RedisCommand.id).label('count'),
+                func.max(RedisCommand.key_size_bytes).label('size')
+            ).filter(
+                RedisCommand.shard_name == shard_name,
+                RedisCommand.key.isnot(None)
+            ).group_by(
+                RedisCommand.key
+            ).order_by(
+                desc('count')
+            ).limit(30).all()
+            
+            # Get recent commands
+            recent_commands = job_db.query(RedisCommand).filter(
+                RedisCommand.shard_name == shard_name
+            ).order_by(
+                desc(RedisCommand.timestamp)
+            ).limit(100).all()
     
     return templates.TemplateResponse("shard_detail.html", {
         "request": request,
@@ -639,10 +651,14 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
             "error": shard.error_message
         })
     
-    # Calculate actual commands from database for accuracy
-    actual_total = db.query(func.count(RedisCommand.id)).filter(
-        RedisCommand.job_id == job_id
-    ).scalar() or 0
+    # Calculate actual commands from job-specific database for accuracy
+    actual_total = 0
+    if job_db_exists(job_id):
+        try:
+            with get_job_db_context(job_id) as job_db:
+                actual_total = job_db.query(func.count(RedisCommand.id)).scalar() or 0
+        except:
+            pass
     
     return {
         "job_id": job_id,
@@ -660,55 +676,54 @@ async def get_chart_data(
     db: Session = Depends(get_db)
 ):
     """Get chart data for visualizations."""
-    if chart_type == "shard_distribution":
-        results = db.query(
-            RedisCommand.shard_name,
-            func.count(RedisCommand.id).label('count')
-        ).filter(
-            RedisCommand.job_id == job_id
-        ).group_by(
-            RedisCommand.shard_name
-        ).all()
-        
-        return {
-            "labels": [r[0] for r in results],
-            "values": [r[1] for r in results]
-        }
+    if not job_db_exists(job_id):
+        return {"labels": [], "values": []}
     
-    elif chart_type == "command_distribution":
-        results = db.query(
-            RedisCommand.command,
-            func.count(RedisCommand.id).label('count')
-        ).filter(
-            RedisCommand.job_id == job_id
-        ).group_by(
-            RedisCommand.command
-        ).order_by(
-            desc('count')
-        ).limit(10).all()
+    with get_job_db_context(job_id) as job_db:
+        if chart_type == "shard_distribution":
+            results = job_db.query(
+                RedisCommand.shard_name,
+                func.count(RedisCommand.id).label('count')
+            ).group_by(
+                RedisCommand.shard_name
+            ).all()
+            
+            return {
+                "labels": [r[0] for r in results],
+                "values": [r[1] for r in results]
+            }
         
-        return {
-            "labels": [r[0] for r in results],
-            "values": [r[1] for r in results]
-        }
-    
-    elif chart_type == "key_pattern_distribution":
-        results = db.query(
-            RedisCommand.key_pattern,
-            func.count(RedisCommand.id).label('count')
-        ).filter(
-            RedisCommand.job_id == job_id,
-            RedisCommand.key_pattern.isnot(None)
-        ).group_by(
-            RedisCommand.key_pattern
-        ).order_by(
-            desc('count')
-        ).limit(10).all()
+        elif chart_type == "command_distribution":
+            results = job_db.query(
+                RedisCommand.command,
+                func.count(RedisCommand.id).label('count')
+            ).group_by(
+                RedisCommand.command
+            ).order_by(
+                desc('count')
+            ).limit(10).all()
+            
+            return {
+                "labels": [r[0] for r in results],
+                "values": [r[1] for r in results]
+            }
         
-        return {
-            "labels": [r[0] for r in results],
-            "values": [r[1] for r in results]
-        }
+        elif chart_type == "key_pattern_distribution":
+            results = job_db.query(
+                RedisCommand.key_pattern,
+                func.count(RedisCommand.id).label('count')
+            ).filter(
+                RedisCommand.key_pattern.isnot(None)
+            ).group_by(
+                RedisCommand.key_pattern
+            ).order_by(
+                desc('count')
+            ).limit(10).all()
+            
+            return {
+                "labels": [r[0] for r in results],
+                "values": [r[1] for r in results]
+            }
     
     return {"labels": [], "values": []}
 
@@ -739,9 +754,10 @@ async def delete_job(job_id: str, db: Session = Depends(get_db)):
     if not job:
         return JSONResponse({"error": "Job not found"}, status_code=404)
     
-    # Delete commands first
-    db.query(RedisCommand).filter(RedisCommand.job_id == job_id).delete()
-    db.query(KeySizeCache).filter(KeySizeCache.job_id == job_id).delete()
+    # Delete job-specific database file (contains all commands)
+    delete_job_db(job_id)
+    
+    # Delete metadata (shards and job record)
     db.query(MonitorShard).filter(MonitorShard.job_id == job_id).delete()
     db.delete(job)
     db.commit()
@@ -800,7 +816,7 @@ async def query_page(
     job_id: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """Custom SQL query page."""
+    """Custom SQL query page - queries job-specific database."""
     results = None
     error = None
     columns = []
@@ -808,17 +824,23 @@ async def query_page(
     # Get all jobs for dropdown
     jobs = db.query(MonitorJob).order_by(desc(MonitorJob.created_at)).all()
     
-    if sql:
+    if sql and job_id:
         try:
             # Safety: only allow SELECT queries
             if not sql.strip().upper().startswith("SELECT"):
                 error = "Only SELECT queries are allowed"
+            elif not job_db_exists(job_id):
+                error = f"No data found for job {job_id}. The job may not have captured any commands."
             else:
-                result = db.execute(text(sql))
-                columns = list(result.keys())
-                results = [dict(row._mapping) for row in result.fetchall()]
+                # Query the job-specific database
+                with get_job_db_context(job_id) as job_db:
+                    result = job_db.execute(text(sql))
+                    columns = list(result.keys())
+                    results = [dict(row._mapping) for row in result.fetchall()]
         except Exception as e:
             error = str(e)
+    elif sql and not job_id:
+        error = "Please select a job to query"
     
     return templates.TemplateResponse("query.html", {
         "request": request,

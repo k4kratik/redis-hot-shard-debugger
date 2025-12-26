@@ -1,17 +1,28 @@
-"""SQLAlchemy models for Redis Monitor Web UI."""
+"""SQLAlchemy models for Redis Monitor Web UI.
+
+Architecture:
+- MetadataBase: Models stored in main DB (redis_monitor.db)
+- CommandBase: Models stored in per-job DB (data/jobs/{job_id}.db)
+"""
 
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Integer, Float, Text, ForeignKey, Enum as SQLEnum, Boolean
+from sqlalchemy import Column, String, DateTime, Integer, Float, Text, ForeignKey, Enum as SQLEnum, Index
 from sqlalchemy.orm import relationship, declarative_base
 import enum
 
-Base = declarative_base()
+# Separate bases for different databases
+MetadataBase = declarative_base()
+CommandBase = declarative_base()
+
+# Keep Base as alias for backward compatibility during migration
+Base = MetadataBase
 
 
 class JobStatus(enum.Enum):
     """Job execution status."""
     pending = "pending"
     running = "running"
+    finalizing = "finalizing"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -22,20 +33,24 @@ class ShardStatus(enum.Enum):
     pending = "pending"
     connecting = "connecting"
     monitoring = "monitoring"
-    finalizing = "finalizing"  # Flushing data to database
+    finalizing = "finalizing"
     completed = "completed"
     failed = "failed"
 
 
-class MonitorJob(Base):
+# ============================================================================
+# METADATA MODELS (stored in redis_monitor.db)
+# ============================================================================
+
+class MonitorJob(MetadataBase):
     """Monitoring job metadata."""
     __tablename__ = "monitor_jobs"
 
     id = Column(String, primary_key=True)
-    name = Column(String, nullable=True)  # Optional job name
+    name = Column(String, nullable=True)
     replication_group_id = Column(String, nullable=False)
     region = Column(String, default="ap-south-1")
-    endpoint_type = Column(String, default="replica")  # primary or replica
+    endpoint_type = Column(String, default="replica")
     duration_seconds = Column(Integer, default=60)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -46,14 +61,13 @@ class MonitorJob(Base):
     error_message = Column(Text, nullable=True)
     total_commands = Column(Integer, default=0)
     
-    # Config stored as JSON string
     config_json = Column(Text, nullable=True)
     
     # Relationship to shards
     shards = relationship("MonitorShard", back_populates="job", cascade="all, delete-orphan")
 
 
-class MonitorShard(Base):
+class MonitorShard(MetadataBase):
     """Per-shard monitoring status and stats."""
     __tablename__ = "monitor_shards"
 
@@ -62,7 +76,7 @@ class MonitorShard(Base):
     shard_name = Column(String, nullable=False)
     host = Column(String, nullable=False)
     port = Column(Integer, nullable=False)
-    role = Column(String, default="replica")  # primary or replica
+    role = Column(String, default="replica")
     
     status = Column(SQLEnum(ShardStatus), default=ShardStatus.pending, nullable=False)
     started_at = Column(DateTime, nullable=True)
@@ -76,12 +90,15 @@ class MonitorShard(Base):
     job = relationship("MonitorJob", back_populates="shards")
 
 
-class RedisCommand(Base):
+# ============================================================================
+# COMMAND MODELS (stored in per-job DB: data/jobs/{job_id}.db)
+# ============================================================================
+
+class RedisCommand(CommandBase):
     """Captured Redis commands from MONITOR."""
     __tablename__ = "redis_commands"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    job_id = Column(String, ForeignKey("monitor_jobs.id"), nullable=False, index=True)
     shard_name = Column(String, nullable=False, index=True)
     
     timestamp = Column(Float, nullable=False)
@@ -93,31 +110,23 @@ class RedisCommand(Base):
     command = Column(String, nullable=False, index=True)
     key = Column(String, nullable=True, index=True)
     key_pattern = Column(String, nullable=True, index=True)
-    key_size_bytes = Column(Integer, nullable=True)  # Size of the key value
+    key_size_bytes = Column(Integer, nullable=True)
     
-    args_json = Column(Text, nullable=True)  # JSON array of arguments
+    args_json = Column(Text, nullable=True)
     raw_line = Column(Text, nullable=True)
     
     # Composite indexes for faster aggregation queries
-    from sqlalchemy import Index
     __table_args__ = (
-        Index('ix_redis_commands_job_shard_cmd', 'job_id', 'shard_name', 'command'),
-        Index('ix_redis_commands_job_pattern', 'job_id', 'key_pattern'),
+        Index('ix_commands_shard_cmd', 'shard_name', 'command'),
+        Index('ix_commands_pattern', 'key_pattern'),
     )
 
 
-class KeySizeCache(Base):
+class KeySizeCache(CommandBase):
     """Cache for key sizes to avoid repeated MEMORY USAGE calls."""
     __tablename__ = "key_size_cache"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    job_id = Column(String, ForeignKey("monitor_jobs.id"), nullable=False, index=True)
-    key = Column(String, nullable=False)
+    key = Column(String, nullable=False, index=True)
     size_bytes = Column(Integer, nullable=True)
     sampled_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Unique constraint on job_id + key
-    __table_args__ = (
-        {'sqlite_autoincrement': True},
-    )
-

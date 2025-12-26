@@ -62,3 +62,5 @@ htmlcov/
 Thumbs.db
 *.bak
 
+
+*.db

@@ -11,7 +11,7 @@ from collections import Counter
 
 from sqlalchemy.orm import Session
 
-from .db import get_db_context
+from .db import get_db_context, get_job_db_context, init_job_db
 from .models import MonitorJob, MonitorShard, RedisCommand, KeySizeCache, JobStatus, ShardStatus
 from ..endpoints import get_replica_endpoints, get_all_endpoints
 from ..utils import extract_key_pattern
@@ -20,7 +20,7 @@ logger = logging.getLogger("redis-monitor-web")
 
 
 class WebShardMonitor:
-    """Monitor a single Redis shard and store results to database."""
+    """Monitor a single Redis shard and store results to job-specific database."""
     
     def __init__(self, job_id: str, shard_id: str, host: str, port: int, 
                  password: str, shard_name: str, duration: int):
@@ -69,7 +69,7 @@ class WebShardMonitor:
     
     def monitor(self):
         """Run MONITOR command and collect data."""
-        # Update shard status to connecting
+        # Update shard status to connecting (in metadata DB)
         with get_db_context() as db:
             shard = db.query(MonitorShard).filter(MonitorShard.id == self.shard_id).first()
             if shard:
@@ -135,7 +135,7 @@ class WebShardMonitor:
                 if shard:
                     shard.status = ShardStatus.finalizing
             
-            # Flush remaining batch
+            # Flush remaining batch to job-specific DB
             if self.batch:
                 logger.info(f"{self.shard_name}: Flushing {len(self.batch)} remaining commands to database...")
                 self._flush_batch()
@@ -184,9 +184,8 @@ class WebShardMonitor:
                 pattern = extract_key_pattern(key)
                 self.key_patterns[pattern] += 1
             
-            # Add to batch
+            # Add to batch (no job_id needed - it's per-job DB now)
             self.batch.append({
-                'job_id': self.job_id,
                 'shard_name': self.shard_name,
                 'timestamp': command.get('time', time.time()),
                 'datetime_utc': datetime.utcnow().isoformat(),
@@ -206,13 +205,13 @@ class WebShardMonitor:
             logger.debug(f"Error processing command: {e}")
     
     def _flush_batch(self):
-        """Flush batch to database using bulk insert."""
+        """Flush batch to job-specific database using bulk insert."""
         if not self.batch:
             return
         
         try:
-            with get_db_context() as db:
-                # Use bulk insert for better performance
+            # Write to job-specific database
+            with get_job_db_context(self.job_id) as db:
                 db.bulk_insert_mappings(RedisCommand, self.batch)
             self.batch = []
         except Exception as e:
@@ -223,6 +222,10 @@ class WebShardMonitor:
 def run_monitoring_job(job_id: str, password: str, profile: str = None):
     """Run a complete monitoring job in the background."""
     logger.info(f"Starting monitoring job {job_id}")
+    
+    # Initialize job-specific database
+    logger.info(f"Initializing database for job {job_id}")
+    init_job_db(job_id)
     
     with get_db_context() as db:
         job = db.query(MonitorJob).filter(MonitorJob.id == job_id).first()
@@ -267,7 +270,7 @@ def run_monitoring_job(job_id: str, password: str, profile: str = None):
         logger.error(f"Failed to discover endpoints: {e}")
         return
     
-    # Create shard records
+    # Create shard records in metadata DB
     shard_ids = []
     with get_db_context() as db:
         for i, endpoint in enumerate(endpoints):
@@ -311,9 +314,9 @@ def run_monitoring_job(job_id: str, password: str, profile: str = None):
         thread.start()
         threads.append(thread)
     
-    # Wait for all threads to complete - they run for 'duration' seconds plus buffer for startup/shutdown
+    # Wait for all threads to complete
     logger.info(f"Waiting for {len(threads)} monitoring threads to complete (duration: {duration}s)...")
-    timeout_per_thread = duration + 60  # Allow duration + 60s buffer for connection/flush
+    timeout_per_thread = duration + 60
     for i, thread in enumerate(threads):
         thread.join(timeout=timeout_per_thread)
         if thread.is_alive():
@@ -350,19 +353,19 @@ def sample_key_sizes(job_id: str, password: str, sample_limit: int = 50):
     """Sample key sizes for a completed job."""
     logger.info(f"Sampling key sizes for job {job_id}")
     
+    # Get shard info from metadata DB
     with get_db_context() as db:
-        # Get unique keys from job
+        shards = db.query(MonitorShard).filter(MonitorShard.job_id == job_id).all()
+        shard_map = {s.shard_name: (s.host, s.port) for s in shards}
+    
+    # Get unique keys from job-specific DB
+    with get_job_db_context(job_id) as db:
         keys_query = db.query(RedisCommand.key, RedisCommand.shard_name).filter(
-            RedisCommand.job_id == job_id,
             RedisCommand.key.isnot(None)
         ).distinct().limit(sample_limit * 10).all()
         
         if not keys_query:
             return
-        
-        # Get shard info
-        shards = db.query(MonitorShard).filter(MonitorShard.job_id == job_id).all()
-        shard_map = {s.shard_name: (s.host, s.port) for s in shards}
     
     # Sample keys from each shard
     keys_by_shard = {}
@@ -394,20 +397,18 @@ def sample_key_sizes(job_id: str, password: str, sample_limit: int = 50):
                 try:
                     size = client.memory_usage(key)
                     if size is not None:
-                        with get_db_context() as db:
-                            # Update commands with this key
+                        # Update in job-specific DB
+                        with get_job_db_context(job_id) as db:
                             db.query(RedisCommand).filter(
-                                RedisCommand.job_id == job_id,
                                 RedisCommand.key == key
                             ).update({'key_size_bytes': size})
                             
                             # Cache the size
                             cache = KeySizeCache(
-                                job_id=job_id,
                                 key=key,
                                 size_bytes=size
                             )
-                            db.merge(cache)  # Use merge to avoid duplicates
+                            db.add(cache)
                         sampled_count += 1
                 except Exception as e:
                     logger.debug(f"Could not get size for key {key}: {e}")
@@ -418,6 +419,4 @@ def sample_key_sizes(job_id: str, password: str, sample_limit: int = 50):
             logger.error(f"Error sampling keys from {shard_name}: {e}")
     
     logger.info(f"Sampled sizes for {sampled_count} keys")
-    
     logger.info(f"Key size sampling completed for job {job_id}")
-
