@@ -253,7 +253,7 @@ async def list_jobs(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/jobs/{job_id}", response_class=HTMLResponse)
 async def job_detail(request: Request, job_id: str, db: Session = Depends(get_db)):
-    """Job detail page with shard status."""
+    """Job detail page with shard status - loads instantly, heavy data fetched async."""
     job = db.query(MonitorJob).filter(MonitorJob.id == job_id).first()
     
     if not job:
@@ -263,7 +263,7 @@ async def job_detail(request: Request, job_id: str, db: Session = Depends(get_db
             "page_title": "Error"
         }, status_code=404)
     
-    # Get shard stats
+    # Get shard stats (lightweight - from metadata DB only)
     shards_data = []
     for shard in job.shards:
         shards_data.append({
@@ -275,79 +275,11 @@ async def job_detail(request: Request, job_id: str, db: Session = Depends(get_db
     # Sort by command count descending to highlight hot shards
     shards_data.sort(key=lambda x: x['command_count'], reverse=True)
     
-    # Get command distribution per shard (for completed jobs)
-    command_by_shard = {}
-    pattern_by_shard = {}
-    cmd_types = []
-    top_patterns = []
-    
-    if job.status.value == 'completed' and job_db_exists(job_id):
-        from sqlalchemy import func
-        
-        # Query from job-specific database
-        with get_job_db_context(job_id) as job_db:
-            # Get all command types used
-            cmd_types_raw = job_db.query(RedisCommand.command).distinct().all()
-            cmd_types = sorted([c[0] for c in cmd_types_raw if c[0]])
-            
-            # Get command counts per shard
-            shard_cmd_data = job_db.query(
-                RedisCommand.shard_name,
-                RedisCommand.command,
-                func.count(RedisCommand.id).label('count')
-            ).group_by(
-                RedisCommand.shard_name,
-                RedisCommand.command
-            ).all()
-            
-            # Organize data: {shard_name: {command: count}}
-            for row in shard_cmd_data:
-                shard_name, cmd, count = row
-                if shard_name not in command_by_shard:
-                    command_by_shard[shard_name] = {}
-                command_by_shard[shard_name][cmd] = count
-            
-            # Get top 10 key patterns overall
-            top_patterns_raw = job_db.query(
-                RedisCommand.key_pattern,
-                func.count(RedisCommand.id).label('count')
-            ).filter(
-                RedisCommand.key_pattern.isnot(None)
-            ).group_by(
-                RedisCommand.key_pattern
-            ).order_by(
-                func.count(RedisCommand.id).desc()
-            ).limit(10).all()
-            top_patterns = [p[0] for p in top_patterns_raw if p[0]]
-            
-            # Get pattern counts per shard (for top patterns only)
-            if top_patterns:
-                shard_pattern_data = job_db.query(
-                    RedisCommand.shard_name,
-                    RedisCommand.key_pattern,
-                    func.count(RedisCommand.id).label('count')
-                ).filter(
-                    RedisCommand.key_pattern.in_(top_patterns)
-                ).group_by(
-                    RedisCommand.shard_name,
-                    RedisCommand.key_pattern
-                ).all()
-                
-                # Organize: {shard_name: {pattern: count}}
-                for row in shard_pattern_data:
-                    shard_name, pattern, count = row
-                    if shard_name not in pattern_by_shard:
-                        pattern_by_shard[shard_name] = {}
-                    pattern_by_shard[shard_name][pattern] = count
-    
+    # Return page immediately - chart data will be loaded async via API
     return templates.TemplateResponse("job_detail.html", {
         "request": request,
         "job": job,
         "shards": shards_data,
-        "command_types": cmd_types,
-        "command_by_shard": command_by_shard,
-        "top_patterns": top_patterns,
-        "pattern_by_shard": pattern_by_shard,
         "page_title": f"Job: {job.name or job.id[:8]}"
     })
 
@@ -735,6 +667,89 @@ async def get_chart_data(
             }
     
     return {"labels": [], "values": []}
+
+
+@app.get("/api/jobs/{job_id}/stats")
+async def get_job_stats(job_id: str, db: Session = Depends(get_db)):
+    """Get all statistics for job detail page - loaded async for fast page load."""
+    job = db.query(MonitorJob).filter(MonitorJob.id == job_id).first()
+    
+    if not job or job.status.value != 'completed' or not job_db_exists(job_id):
+        return {
+            "loaded": False,
+            "command_types": [],
+            "command_by_shard": {},
+            "top_patterns": [],
+            "pattern_by_shard": {}
+        }
+    
+    command_by_shard = {}
+    pattern_by_shard = {}
+    cmd_types = []
+    top_patterns = []
+    
+    with get_job_db_context(job_id) as job_db:
+        # Get all command types used
+        cmd_types_raw = job_db.query(RedisCommand.command).distinct().all()
+        cmd_types = sorted([c[0] for c in cmd_types_raw if c[0]])
+        
+        # Get command counts per shard
+        shard_cmd_data = job_db.query(
+            RedisCommand.shard_name,
+            RedisCommand.command,
+            func.count(RedisCommand.id).label('count')
+        ).group_by(
+            RedisCommand.shard_name,
+            RedisCommand.command
+        ).all()
+        
+        # Organize data: {shard_name: {command: count}}
+        for row in shard_cmd_data:
+            shard_name, cmd, count = row
+            if shard_name not in command_by_shard:
+                command_by_shard[shard_name] = {}
+            command_by_shard[shard_name][cmd] = count
+        
+        # Get top 10 key patterns overall
+        top_patterns_raw = job_db.query(
+            RedisCommand.key_pattern,
+            func.count(RedisCommand.id).label('count')
+        ).filter(
+            RedisCommand.key_pattern.isnot(None)
+        ).group_by(
+            RedisCommand.key_pattern
+        ).order_by(
+            func.count(RedisCommand.id).desc()
+        ).limit(10).all()
+        top_patterns = [p[0] for p in top_patterns_raw if p[0]]
+        
+        # Get pattern counts per shard (for top patterns only)
+        if top_patterns:
+            shard_pattern_data = job_db.query(
+                RedisCommand.shard_name,
+                RedisCommand.key_pattern,
+                func.count(RedisCommand.id).label('count')
+            ).filter(
+                RedisCommand.key_pattern.in_(top_patterns)
+            ).group_by(
+                RedisCommand.shard_name,
+                RedisCommand.key_pattern
+            ).all()
+            
+            # Organize: {shard_name: {pattern: count}}
+            for row in shard_pattern_data:
+                shard_name, pattern, count = row
+                if shard_name not in pattern_by_shard:
+                    pattern_by_shard[shard_name] = {}
+                pattern_by_shard[shard_name][pattern] = count
+    
+    return {
+        "loaded": True,
+        "command_types": cmd_types,
+        "command_by_shard": command_by_shard,
+        "top_patterns": top_patterns,
+        "pattern_by_shard": pattern_by_shard
+    }
 
 
 @app.post("/api/jobs/{job_id}/sample-sizes")

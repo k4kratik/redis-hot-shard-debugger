@@ -98,9 +98,9 @@
                         </span>
                         {% endif %}
                         
-                        <h3 class="text-lg font-semibold text-white">
+                        <a href="/jobs/{{ item.job.id }}" class="text-lg font-semibold text-white hover:text-redis-400 transition-colors">
                             {{ item.job.name or item.job.replication_group_id }}
-                        </h3>
+                        </a>
                     </div>
                     
                     <div class="flex flex-wrap items-center gap-4 text-sm text-slate-400">
