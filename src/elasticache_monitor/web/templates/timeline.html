@@ -1,0 +1,413 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="min-h-screen bg-slate-950 text-white" x-data="timelineApp()">
+    <!-- Header -->
+    <div class="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10">
+        <div class="max-w-7xl mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <a href="/jobs/{{ job.id }}" class="text-slate-400 hover:text-white transition-colors">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                        </svg>
+                    </a>
+                    <div>
+                        <h1 class="text-xl font-semibold">Timeline Analysis</h1>
+                        <p class="text-sm text-slate-400">{{ job.name or job.replication_group_id }}</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <a href="/jobs/{{ job.id }}" class="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">
+                        Overview
+                    </a>
+                    <a href="/jobs/{{ job.id }}/analysis" class="px-3 py-1.5 text-sm bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors">
+                        Analysis
+                    </a>
+                    <span class="px-3 py-1.5 text-sm bg-purple-600 rounded-lg">
+                        Timeline
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="max-w-7xl mx-auto px-6 py-6">
+        <div class="bg-slate-900 rounded-xl border border-slate-800 p-6 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <!-- Group By -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-2">Group By</label>
+                    <select x-model="groupBy" @change="fetchData()" 
+                            class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                        <option value="command">Command Type</option>
+                        <option value="client_ip">Client IP</option>
+                        <option value="key_pattern">Key Pattern</option>
+                        <option value="key">Individual Key</option>
+                    </select>
+                </div>
+
+                <!-- Time Granularity -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-2">Time Granularity</label>
+                    <select x-model="granularity" @change="fetchData()"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                        <option value="1">1 second</option>
+                        <option value="5">5 seconds</option>
+                        <option value="10">10 seconds</option>
+                        <option value="30">30 seconds</option>
+                        <option value="60">1 minute</option>
+                    </select>
+                </div>
+
+                <!-- Shard Selection -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-2">Shards</label>
+                    <div class="relative" x-data="{ open: false }">
+                        <button @click="open = !open" type="button"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-left text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent flex items-center justify-between">
+                            <span x-text="selectedShards.length === 0 ? 'All Shards' : selectedShards.length + ' selected'"></span>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+                        <div x-show="open" @click.away="open = false" x-transition
+                             class="absolute z-20 mt-1 w-full bg-slate-800 border border-slate-700 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                            <label class="flex items-center px-3 py-2 hover:bg-slate-700 cursor-pointer border-b border-slate-700">
+                                <input type="checkbox" 
+                                       :checked="selectedShards.length === 0"
+                                       @change="selectedShards = []; fetchData()"
+                                       class="rounded bg-slate-700 border-slate-600 text-purple-500 focus:ring-purple-500">
+                                <span class="ml-2 text-sm">All Shards</span>
+                            </label>
+                            {% for shard in shards %}
+                            <label class="flex items-center px-3 py-2 hover:bg-slate-700 cursor-pointer">
+                                <input type="checkbox" value="{{ shard }}"
+                                       x-model="selectedShards"
+                                       @change="fetchData()"
+                                       class="rounded bg-slate-700 border-slate-600 text-purple-500 focus:ring-purple-500">
+                                <span class="ml-2 text-sm">{{ shard }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filter -->
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-2">
+                        Filter <span class="text-slate-500" x-text="'(' + groupBy + ')'"></span>
+                    </label>
+                    <div class="relative">
+                        <input type="text" x-model="filterValue" 
+                               @input.debounce.500ms="fetchData()"
+                               placeholder="Type to filter..."
+                               list="filter-suggestions"
+                               class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                        <datalist id="filter-suggestions">
+                            <template x-if="groupBy === 'command'">
+                                {% for cmd in commands %}
+                                <option value="{{ cmd }}">
+                                {% endfor %}
+                            </template>
+                            <template x-if="groupBy === 'key_pattern'">
+                                {% for pattern in patterns %}
+                                <option value="{{ pattern }}">
+                                {% endfor %}
+                            </template>
+                        </datalist>
+                        <button x-show="filterValue" @click="filterValue = ''; fetchData()" 
+                                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Filters -->
+            <div class="mt-4 pt-4 border-t border-slate-800">
+                <div class="flex flex-wrap gap-2">
+                    <span class="text-sm text-slate-400 mr-2">Quick filters:</span>
+                    {% for cmd in commands[:8] %}
+                    <button @click="groupBy = 'command'; filterValue = '{{ cmd }}'; fetchData()"
+                            class="px-2 py-1 text-xs bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors">
+                        {{ cmd }}
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" x-show="summary">
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                <div class="text-2xl font-bold text-purple-400" x-text="formatNumber(summary?.total_commands || 0)"></div>
+                <div class="text-sm text-slate-400">Total Commands</div>
+            </div>
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                <div class="text-2xl font-bold text-emerald-400" x-text="summary?.time_range || 'N/A'"></div>
+                <div class="text-sm text-slate-400">Time Range</div>
+            </div>
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                <div class="text-2xl font-bold text-amber-400" x-text="summary?.shards?.length || 0"></div>
+                <div class="text-sm text-slate-400">Active Shards</div>
+            </div>
+            <div class="bg-slate-900 rounded-xl border border-slate-800 p-4">
+                <div class="text-2xl font-bold text-cyan-400" x-text="summary?.groups?.length || 0"></div>
+                <div class="text-sm text-slate-400" x-text="groupBy === 'command' ? 'Unique Commands' : groupBy === 'client_ip' ? 'Unique Clients' : 'Unique Patterns'"></div>
+            </div>
+        </div>
+
+        <!-- Chart -->
+        <div class="bg-slate-900 rounded-xl border border-slate-800 p-6">
+            <!-- Loading State -->
+            <div x-show="loading" class="flex items-center justify-center h-96">
+                <div class="text-center">
+                    <svg class="animate-spin h-10 w-10 text-purple-500 mx-auto mb-4" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <p class="text-slate-400">Loading timeline data...</p>
+                </div>
+            </div>
+
+            <!-- Error State -->
+            <div x-show="error && !loading" class="flex items-center justify-center h-96">
+                <div class="text-center">
+                    <svg class="w-12 h-12 text-red-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                    <p class="text-red-400" x-text="error"></p>
+                </div>
+            </div>
+
+            <!-- Chart Canvas -->
+            <div x-show="!loading && !error">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold">Commands Over Time</h3>
+                    <div class="flex items-center gap-2">
+                        <button @click="chartType = 'bar'; updateChartType()" 
+                                :class="chartType === 'bar' ? 'bg-purple-600' : 'bg-slate-800 hover:bg-slate-700'"
+                                class="px-3 py-1.5 text-sm rounded-lg transition-colors">
+                            Bar
+                        </button>
+                        <button @click="chartType = 'line'; updateChartType()" 
+                                :class="chartType === 'line' ? 'bg-purple-600' : 'bg-slate-800 hover:bg-slate-700'"
+                                class="px-3 py-1.5 text-sm rounded-lg transition-colors">
+                            Line
+                        </button>
+                    </div>
+                </div>
+                <div class="h-96">
+                    <canvas id="timelineChart"></canvas>
+                </div>
+                <div class="mt-4 text-xs text-slate-500 text-center">
+                    💡 Click legend items to show/hide • Right-click to isolate
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Table -->
+        <div class="bg-slate-900 rounded-xl border border-slate-800 mt-6 overflow-hidden" x-show="summary?.groups?.length > 0">
+            <div class="p-4 border-b border-slate-800">
+                <h3 class="font-semibold">Breakdown by <span x-text="groupBy === 'command' ? 'Command' : groupBy === 'client_ip' ? 'Client' : 'Pattern'"></span></h3>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-slate-800/50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-sm font-medium text-slate-300">#</th>
+                            <th class="px-4 py-3 text-left text-sm font-medium text-slate-300" x-text="groupBy === 'command' ? 'Command' : groupBy === 'client_ip' ? 'Client IP' : 'Pattern'"></th>
+                            <th class="px-4 py-3 text-right text-sm font-medium text-slate-300">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800">
+                        <template x-for="(group, idx) in summary?.groups?.slice(0, 20)" :key="idx">
+                            <tr class="hover:bg-slate-800/50">
+                                <td class="px-4 py-3 text-sm text-slate-400" x-text="idx + 1"></td>
+                                <td class="px-4 py-3 text-sm font-mono" x-text="group"></td>
+                                <td class="px-4 py-3 text-right">
+                                    <button @click="filterValue = group; fetchData()" 
+                                            class="text-xs px-2 py-1 bg-purple-600/20 text-purple-400 hover:bg-purple-600/40 rounded transition-colors">
+                                        Filter
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+function timelineApp() {
+    return {
+        jobId: '{{ job.id }}',
+        groupBy: 'command',
+        granularity: 1,
+        selectedShards: [],
+        filterValue: '',
+        chartType: 'bar',
+        loading: true,
+        error: null,
+        summary: null,
+        chart: null,
+        chartData: null,
+
+        init() {
+            this.fetchData();
+        },
+
+        async fetchData() {
+            this.loading = true;
+            this.error = null;
+
+            const params = new URLSearchParams({
+                group_by: this.groupBy,
+                granularity: this.granularity
+            });
+
+            if (this.selectedShards.length > 0) {
+                params.set('shards', this.selectedShards.join(','));
+            }
+            if (this.filterValue) {
+                params.set('filter_value', this.filterValue);
+            }
+
+            try {
+                const response = await fetch(`/api/jobs/${this.jobId}/timeline-data?${params}`);
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Failed to fetch data');
+                }
+
+                this.chartData = await response.json();
+                this.summary = this.chartData.summary;
+                this.renderChart();
+            } catch (e) {
+                this.error = e.message;
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        renderChart() {
+            const ctx = document.getElementById('timelineChart');
+            if (!ctx) return;
+
+            if (this.chart) {
+                this.chart.destroy();
+            }
+
+            const isLine = this.chartType === 'line';
+
+            // Modify datasets for line chart
+            const datasets = this.chartData.datasets.map(ds => ({
+                ...ds,
+                fill: isLine,
+                tension: 0.3,
+                pointRadius: isLine ? 2 : 0,
+                pointHoverRadius: isLine ? 5 : 0
+            }));
+
+            this.chart = new Chart(ctx, {
+                type: this.chartType,
+                data: {
+                    labels: this.chartData.labels,
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    scales: {
+                        x: {
+                            stacked: this.chartType === 'bar',
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                            ticks: { color: '#94a3b8' }
+                        },
+                        y: {
+                            stacked: this.chartType === 'bar',
+                            grid: { color: 'rgba(148, 163, 184, 0.1)' },
+                            ticks: { 
+                                color: '#94a3b8',
+                                callback: (value) => this.formatNumber(value)
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                            labels: { 
+                                color: '#e2e8f0',
+                                usePointStyle: true,
+                                padding: 15
+                            },
+                            onClick: (e, legendItem, legend) => {
+                                // Right-click behavior handled separately
+                                const index = legendItem.datasetIndex;
+                                const meta = legend.chart.getDatasetMeta(index);
+                                meta.hidden = !meta.hidden;
+                                legend.chart.update();
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleColor: '#f8fafc',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: (context) => {
+                                    return `${context.dataset.label}: ${this.formatNumber(context.raw)}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Add right-click to isolate
+            ctx.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                const points = this.chart.getElementsAtEventForMode(e, 'nearest', { intersect: false }, false);
+                if (points.length) {
+                    const datasetIndex = points[0].datasetIndex;
+                    // Toggle: if only this one is visible, show all; else isolate this one
+                    const allHidden = this.chart.data.datasets.every((ds, i) => 
+                        i === datasetIndex ? false : this.chart.getDatasetMeta(i).hidden
+                    );
+                    
+                    this.chart.data.datasets.forEach((ds, i) => {
+                        this.chart.getDatasetMeta(i).hidden = allHidden ? false : (i !== datasetIndex);
+                    });
+                    this.chart.update();
+                }
+            });
+        },
+
+        updateChartType() {
+            if (this.chartData) {
+                this.renderChart();
+            }
+        },
+
+        formatNumber(n) {
+            if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+            return n.toLocaleString();
+        }
+    };
+}
+</script>
+{% endblock %}
+

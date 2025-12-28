@@ -997,3 +997,232 @@ async def query_page(
         "page_title": "SQL Query"
     })
 
+
+# =============================================================================
+# TIMELINE ANALYSIS
+# =============================================================================
+
+@app.get("/jobs/{job_id}/timeline", response_class=HTMLResponse)
+async def job_timeline(
+    request: Request,
+    job_id: str,
+    db: Session = Depends(get_db)
+):
+    """Timeline analysis view - time-series visualization of Redis traffic."""
+    job = db.query(MonitorJob).filter(MonitorJob.id == job_id).first()
+    if not job:
+        return RedirectResponse(url="/jobs", status_code=302)
+    
+    # Get shards for this job
+    shards = db.query(MonitorShard).filter(MonitorShard.job_id == job_id).all()
+    shard_names = sorted([s.shard_name for s in shards])
+    
+    # Get unique commands and patterns from the job database
+    commands = []
+    patterns = []
+    
+    if job_db_exists(job_id):
+        with get_job_db_context(job_id) as job_db:
+            # Get unique commands
+            cmd_result = job_db.execute(text(
+                "SELECT DISTINCT command FROM redis_commands ORDER BY command"
+            ))
+            commands = [row[0] for row in cmd_result.fetchall()]
+            
+            # Get top patterns
+            pattern_result = job_db.execute(text(
+                """SELECT key_pattern, COUNT(*) as cnt 
+                   FROM redis_commands 
+                   WHERE key_pattern IS NOT NULL 
+                   GROUP BY key_pattern 
+                   ORDER BY cnt DESC 
+                   LIMIT 50"""
+            ))
+            patterns = [row[0] for row in pattern_result.fetchall()]
+    
+    return templates.TemplateResponse("timeline.html", {
+        "request": request,
+        "job": job,
+        "shards": shard_names,
+        "commands": commands,
+        "patterns": patterns,
+        "page_title": f"Timeline - {job.name or job.replication_group_id}"
+    })
+
+
+@app.get("/api/jobs/{job_id}/timeline-data")
+async def get_timeline_data(
+    job_id: str,
+    group_by: str = "command",  # command, client_ip, key_pattern, key
+    shards: Optional[str] = None,  # comma-separated shard names
+    filter_value: Optional[str] = None,  # specific command/pattern/key to filter
+    granularity: int = 1,  # seconds per bucket
+    db: Session = Depends(get_db)
+):
+    """Get time-series data for timeline visualization."""
+    job = db.query(MonitorJob).filter(MonitorJob.id == job_id).first()
+    if not job:
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+    
+    if not job_db_exists(job_id):
+        return JSONResponse({"error": "No data for this job"}, status_code=404)
+    
+    # Parse shards
+    shard_list = shards.split(",") if shards else None
+    
+    with get_job_db_context(job_id) as job_db:
+        # Build the query based on group_by
+        group_column = {
+            "command": "command",
+            "client_ip": "client_ip", 
+            "key_pattern": "key_pattern",
+            "key": "key"
+        }.get(group_by, "command")
+        
+        # Build WHERE clause
+        where_clauses = ["1=1"]
+        params = {}
+        
+        if shard_list:
+            placeholders = ", ".join([f":shard_{i}" for i in range(len(shard_list))])
+            where_clauses.append(f"shard_name IN ({placeholders})")
+            for i, s in enumerate(shard_list):
+                params[f"shard_{i}"] = s
+        
+        if filter_value:
+            where_clauses.append(f"{group_column} = :filter_value")
+            params["filter_value"] = filter_value
+        
+        where_sql = " AND ".join(where_clauses)
+        
+        # Query for time-series data
+        # Group by time bucket and the selected dimension
+        query = f"""
+            SELECT 
+                CAST((CAST(timestamp AS INTEGER) / :granularity) * :granularity AS INTEGER) as time_bucket,
+                shard_name,
+                {group_column} as group_value,
+                COUNT(*) as count
+            FROM redis_commands
+            WHERE {where_sql}
+            GROUP BY time_bucket, shard_name, {group_column}
+            ORDER BY time_bucket, shard_name
+        """
+        params["granularity"] = granularity
+        
+        result = job_db.execute(text(query), params)
+        rows = result.fetchall()
+        
+        # Process data for Chart.js
+        # Structure: {time_bucket: {shard: {group_value: count}}}
+        time_data = {}
+        all_groups = set()
+        all_shards = set()
+        
+        for row in rows:
+            time_bucket, shard_name, group_value, count = row
+            if time_bucket not in time_data:
+                time_data[time_bucket] = {}
+            if shard_name not in time_data[time_bucket]:
+                time_data[time_bucket][shard_name] = {}
+            
+            group_key = group_value or "(none)"
+            time_data[time_bucket][shard_name][group_key] = count
+            all_groups.add(group_key)
+            all_shards.add(shard_name)
+        
+        # Sort and prepare response
+        sorted_times = sorted(time_data.keys())
+        all_groups = sorted(all_groups)
+        all_shards = sorted(all_shards)
+        
+        # Convert timestamps to readable format
+        labels = []
+        for ts in sorted_times:
+            dt = datetime.fromtimestamp(ts)
+            labels.append(dt.strftime("%H:%M:%S"))
+        
+        # Build datasets for Chart.js
+        # If multiple shards, create dataset per shard+group combo
+        # If single shard or filtering, create dataset per group
+        datasets = []
+        
+        # Color palette for shards
+        shard_colors = [
+            "rgba(168, 85, 247, 0.8)",   # purple
+            "rgba(16, 185, 129, 0.8)",   # emerald
+            "rgba(245, 158, 11, 0.8)",   # amber
+            "rgba(6, 182, 212, 0.8)",    # cyan
+            "rgba(239, 68, 68, 0.8)",    # red
+            "rgba(59, 130, 246, 0.8)",   # blue
+            "rgba(236, 72, 153, 0.8)",   # pink
+            "rgba(132, 204, 22, 0.8)",   # lime
+        ]
+        
+        # Group colors (for when showing single shard)
+        group_colors = [
+            "rgba(99, 102, 241, 0.8)",   # indigo
+            "rgba(34, 197, 94, 0.8)",    # green
+            "rgba(249, 115, 22, 0.8)",   # orange
+            "rgba(14, 165, 233, 0.8)",   # sky
+            "rgba(244, 63, 94, 0.8)",    # rose
+            "rgba(168, 85, 247, 0.8)",   # purple
+            "rgba(234, 179, 8, 0.8)",    # yellow
+            "rgba(20, 184, 166, 0.8)",   # teal
+        ]
+        
+        if len(all_shards) > 1 and not filter_value:
+            # Multiple shards - show by shard with total counts
+            for idx, shard in enumerate(all_shards):
+                data = []
+                for ts in sorted_times:
+                    shard_data = time_data[ts].get(shard, {})
+                    total = sum(shard_data.values())
+                    data.append(total)
+                
+                datasets.append({
+                    "label": shard,
+                    "data": data,
+                    "backgroundColor": shard_colors[idx % len(shard_colors)],
+                    "borderColor": shard_colors[idx % len(shard_colors)].replace("0.8", "1"),
+                    "borderWidth": 1
+                })
+        else:
+            # Single shard or filtered - show by group value
+            top_groups = list(all_groups)[:10]  # Limit to top 10 groups
+            
+            for idx, group in enumerate(top_groups):
+                data = []
+                for ts in sorted_times:
+                    total = 0
+                    for shard in all_shards:
+                        shard_data = time_data[ts].get(shard, {})
+                        total += shard_data.get(group, 0)
+                    data.append(total)
+                
+                datasets.append({
+                    "label": group[:30] + "..." if len(group) > 30 else group,
+                    "data": data,
+                    "backgroundColor": group_colors[idx % len(group_colors)],
+                    "borderColor": group_colors[idx % len(group_colors)].replace("0.8", "1"),
+                    "borderWidth": 1
+                })
+        
+        # Get summary stats
+        total_commands = sum(
+            sum(shard_data.values()) 
+            for time_data_item in time_data.values() 
+            for shard_data in time_data_item.values()
+        )
+        
+        return JSONResponse({
+            "labels": labels,
+            "datasets": datasets,
+            "summary": {
+                "total_commands": total_commands,
+                "time_range": f"{labels[0]} - {labels[-1]}" if labels else "N/A",
+                "shards": list(all_shards),
+                "groups": list(all_groups)[:20]
+            }
+        })
+

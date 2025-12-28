@@ -162,6 +162,12 @@
             </div>
             <div class="flex items-center gap-2">
                 {% if job.status.value == 'completed' %}
+                <a href="/jobs/{{ job.id }}/timeline" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-all font-medium">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    </svg>
+                    Timeline
+                </a>
                 <a href="/jobs/{{ job.id }}/analysis" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-redis-500/20 text-redis-400 hover:bg-redis-500/30 transition-all font-medium">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -591,6 +597,19 @@
         <div class="glass-card rounded-xl p-6">
             <h3 class="text-lg font-semibold text-white mb-4">Quick Analysis</h3>
             <div class="space-y-4">
+                <!-- Timeline - Featured -->
+                <a href="/jobs/{{ job.id }}/timeline" class="flex items-center justify-between p-4 rounded-lg bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/30 hover:border-purple-500/50 transition-colors group">
+                    <div class="flex items-center gap-3">
+                        <span class="text-xl">📈</span>
+                        <div>
+                            <span class="text-white font-medium">Timeline Analysis</span>
+                            <span class="text-purple-300 text-xs block">Time-series visualization</span>
+                        </div>
+                    </div>
+                    <svg class="w-4 h-4 text-purple-400 group-hover:text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                    </svg>
+                </a>
                 <a href="/jobs/{{ job.id }}/analysis?group_by=key_pattern" class="flex items-center justify-between p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition-colors group">
                     <div class="flex items-center gap-3">
                         <span class="text-lg">📊</span>

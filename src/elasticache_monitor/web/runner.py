@@ -331,13 +331,14 @@ def run_monitoring_job(job_id: str, password: str, profile: str = None):
         logger.info(f"  - {m.shard_name}: {m.command_count} commands, error={m.error}")
     logger.info(f"Total commands: {total_commands}, has_errors: {has_errors}")
     
-    # Sample key sizes if we have commands
-    if total_commands > 0:
-        logger.info(f"Sampling key sizes for {job_id}...")
-        try:
-            sample_key_sizes(job_id, password, sample_limit=100)
-        except Exception as e:
-            logger.error(f"Failed to sample key sizes: {e}")
+    # Note: Key size sampling disabled to avoid additional Redis queries
+    # Key sizes can be sampled manually via the API if needed
+    # if total_commands > 0:
+    #     logger.info(f"Sampling key sizes for {job_id}...")
+    #     try:
+    #         sample_key_sizes(job_id, password, sample_limit=100)
+    #     except Exception as e:
+    #         logger.error(f"Failed to sample key sizes: {e}")
     
     with get_db_context() as db:
         job = db.query(MonitorJob).filter(MonitorJob.id == job_id).first()
