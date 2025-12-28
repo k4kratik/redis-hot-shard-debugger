@@ -109,9 +109,9 @@ class WebShardMonitor:
                     if isinstance(command, dict) and command.get('command'):
                         self._process_command(command)
                     
-                    # Log progress every 1000 commands
-                    if self.command_count > 0 and self.command_count % 1000 == 0:
-                        logger.info(f"{self.shard_name}: {self.command_count} commands captured...")
+                    # Log progress every 50000 commands (reduced noise)
+                    if self.command_count > 0 and self.command_count % 50000 == 0:
+                        logger.info(f"{self.shard_name}: {self.command_count:,} commands captured")
         
         except Exception as e:
             self.error = str(e)
