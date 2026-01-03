@@ -5,7 +5,13 @@ A comprehensive toolkit for debugging hot shard issues and analyzing
 uneven distribution in AWS ElastiCache clusters.
 """
 
-__version__ = "2.0.0"
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("elasticache-monitor")
+except PackageNotFoundError:
+    __version__ = "dev"  # Running from source without install
+
 __author__ = "Kratik Jain"
 
 from .monitor import ShardMonitor

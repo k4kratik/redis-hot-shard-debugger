@@ -55,6 +55,9 @@ jobs:
         run: |
           # Update version in pyproject.toml at build time
           sed -i 's/version = ".*"/version = "${{ steps.version.outputs.version }}"/' pyproject.toml
+          
+          echo "📋 pyproject.toml version:"
+          grep 'version = ' pyproject.toml
 
           # Build package
           python -m build
