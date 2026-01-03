@@ -193,7 +193,7 @@
         </svg>
         <h3 class="text-lg font-medium text-slate-400 mb-2">No Jobs Yet</h3>
         <p class="text-slate-500 text-sm mb-6">
-            Start your first monitoring session to analyze Redis command traffic
+            Start your first monitoring session to analyze Redis/Valkey command traffic
         </p>
         <a href="/" class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-redis-500 text-white font-medium hover:bg-redis-600 transition-colors">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -236,7 +236,7 @@
             <form :action="'/jobs/' + rerunJobId + '/rerun'" method="POST" autocomplete="off" class="space-y-4">
                 <div class="space-y-2">
                     <label class="block text-sm font-medium text-slate-300">
-                        Redis Password <span class="text-redis-500">*</span>
+                        Redis/Valkey Password <span class="text-redis-500">*</span>
                     </label>
                     <input type="password" 
                            name="password" 
@@ -249,7 +249,7 @@
                            data-form-type="other"
                            data-bwignore
                            required
-                           placeholder="Enter Redis AUTH token"
+                           placeholder="Enter AUTH token"
                            class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50">
                     <p class="text-xs text-slate-500">Password is not stored and only used for this monitoring session</p>
                 </div>

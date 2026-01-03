@@ -30,8 +30,8 @@ logger = logging.getLogger("elasticache-monitor-web")
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Redis Hot Shard Debugger",
-    description="Debug uneven key distribution and hot shards in ElastiCache Redis clusters",
+    title="ElastiCache Hot Shard Debugger",
+    description="Debug uneven key distribution and hot shards in ElastiCache Redis/Valkey clusters",
     version="1.0.0"
 )
 
@@ -146,7 +146,7 @@ async def index(request: Request, db: Session = Depends(get_db)):
     
     return templates.TemplateResponse("index.html", {
         "request": request,
-        "page_title": "Redis Hot Shard Debugger",
+        "page_title": "ElastiCache Hot Shard Debugger",
         "recent_jobs": recent_jobs,
         "prev_replication_groups": prev_replication_groups,
         "prev_job_names": prev_job_names
@@ -177,7 +177,7 @@ async def create_job(
     if not replication_group_id:
         return templates.TemplateResponse("index.html", {
             "request": request,
-            "page_title": "Redis Hot Shard Debugger",
+            "page_title": "ElastiCache Hot Shard Debugger",
             "error": "Replication Group ID is required",
             "recent_jobs": db.query(MonitorJob).order_by(desc(MonitorJob.created_at)).limit(5).all()
         })
@@ -185,8 +185,8 @@ async def create_job(
     if not password:
         return templates.TemplateResponse("index.html", {
             "request": request,
-            "page_title": "Redis Hot Shard Debugger",
-            "error": "Redis password is required",
+            "page_title": "ElastiCache Hot Shard Debugger",
+            "error": "Redis/Valkey password is required",
             "recent_jobs": db.query(MonitorJob).order_by(desc(MonitorJob.created_at)).limit(5).all()
         })
     

@@ -5,11 +5,11 @@
     <!-- Header -->
     <div class="text-center space-y-4">
         <h1 class="text-4xl font-bold bg-gradient-to-r from-white via-redis-200 to-redis-400 bg-clip-text text-transparent">
-            Redis Hot Shard Debugger
+            ElastiCache Hot Shard Debugger
         </h1>
         <p class="text-slate-400 max-w-2xl mx-auto">
-            Monitor your ElastiCache Redis cluster to identify hot shards and uneven key distribution. 
-            Capture real-time command traffic of your cache.
+            Monitor your ElastiCache cluster to identify hot shards and uneven key distribution. 
+            Capture real-time command traffic from Redis/Valkey nodes.
         </p>
         
         <!-- Animated Visualization -->
@@ -83,7 +83,7 @@
         
         <!-- Labels -->
         <div class="flex justify-center gap-20 text-[10px] text-slate-600 uppercase tracking-wider">
-            <span>Redis Shards</span>
+            <span>Shards</span>
             <span>Analysis</span>
             <span>Insights</span>
         </div>
@@ -140,7 +140,7 @@
                 <!-- Password -->
                 <div class="space-y-2">
                     <label for="redis_auth_token" class="block text-sm font-medium text-slate-300">
-                        Redis Password <span class="text-redis-500">*</span>
+                        Redis/Valkey Password <span class="text-redis-500">*</span>
                     </label>
                     <input type="password" 
                            name="password" 
@@ -153,7 +153,7 @@
                            data-form-type="other"
                            data-bwignore
                            required
-                           placeholder="Enter Redis AUTH token"
+                           placeholder="Enter AUTH token"
                            class="w-full px-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-redis-500/50 focus:ring-1 focus:ring-redis-500/50 transition-all">
                     <p class="text-xs text-slate-500">AUTH password (not stored, used only during monitoring)</p>
                 </div>
@@ -314,7 +314,7 @@
             </div>
             <div class="flex items-start gap-3">
                 <span class="text-redis-400 font-bold">3.</span>
-                <span class="text-slate-300">Captures all Redis commands, keys, and client information</span>
+                <span class="text-slate-300">Captures all Redis/Valkey commands, keys, and client information</span>
             </div>
             <div class="flex items-start gap-3">
                 <span class="text-redis-400 font-bold">4.</span>

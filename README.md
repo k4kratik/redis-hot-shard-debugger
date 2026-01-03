@@ -39,7 +39,7 @@ elasticache-monitor --port 3000  # Custom port
 ### 2. Create a Monitoring Job
 
 1. Enter your **Replication Group ID**
-2. Enter your **Redis password**
+2. Enter your **Redis/Valkey password**
 3. Set **duration** (30-300 seconds)
 4. Click **Start Monitoring**
 
