@@ -1,4 +1,4 @@
-"""FastAPI main application for Redis Hot Shard Debugger."""
+"""FastAPI main application for ElastiCache Hot Shard Debugger."""
 
 import logging
 import sys
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, text
 from pathlib import Path
 
+from elasticache_monitor import __version__
 from .db import init_db, get_db, get_job_db_context, delete_job_db, job_db_exists, get_job_db_path
 from .models import MonitorJob, MonitorShard, RedisCommand, KeySizeCache, JobStatus, ShardStatus
 from .runner import run_monitoring_job, sample_key_sizes
@@ -32,12 +33,15 @@ logger = logging.getLogger("elasticache-monitor-web")
 app = FastAPI(
     title="ElastiCache Hot Shard Debugger",
     description="Debug uneven key distribution and hot shards in ElastiCache Redis/Valkey clusters",
-    version="1.0.0"
+    version=__version__
 )
 
 # Setup templates
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# Add version to template globals
+templates.env.globals["app_version"] = __version__
 
 
 # Custom Jinja2 filters

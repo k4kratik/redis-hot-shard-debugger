@@ -540,13 +540,15 @@ def web_server(host, port, reload):
     elasticache-monitor-cli -c my-cluster -p PASSWORD -d 60
     """
     import uvicorn
+    from elasticache_monitor import __version__
     
     print(f"{Fore.GREEN}{'='*80}")
-    print(f"{Fore.GREEN}🌐 ELASTICACHE HOT SHARD DEBUGGER")
+    print(f"{Fore.GREEN}🌐 ELASTICACHE HOT SHARD DEBUGGER {Fore.YELLOW}v{__version__}")
     print(f"{Fore.GREEN}{'='*80}\n")
     
     print(f"{Fore.CYAN}Starting web server...")
-    print(f"  URL:  {Fore.GREEN}http://localhost:{port}")
+    print(f"  URL:     {Fore.GREEN}http://localhost:{port}")
+    print(f"  Version: {Fore.YELLOW}v{__version__}")
     print()
     
     uvicorn.run(
