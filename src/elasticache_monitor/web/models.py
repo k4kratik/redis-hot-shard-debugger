@@ -86,6 +86,23 @@ class MonitorShard(MetadataBase):
     command_count = Column(Integer, default=0)
     qps = Column(Float, default=0.0)
     
+    # Redis server info (captured at start)
+    redis_version = Column(String, nullable=True)  # e.g., "7.0.7"
+    
+    # Memory info (captured at end of monitoring)
+    memory_used_bytes = Column(Integer, nullable=True)  # used_memory
+    memory_max_bytes = Column(Integer, nullable=True)   # maxmemory (0 = no limit)
+    memory_peak_bytes = Column(Integer, nullable=True)  # used_memory_peak
+    memory_rss_bytes = Column(Integer, nullable=True)   # used_memory_rss (OS-level)
+    
+    # CPU metrics from INFO command (captured at start and end)
+    cpu_sys_start = Column(Float, nullable=True)  # used_cpu_sys at start
+    cpu_user_start = Column(Float, nullable=True)  # used_cpu_user at start
+    cpu_sys_end = Column(Float, nullable=True)  # used_cpu_sys at end
+    cpu_user_end = Column(Float, nullable=True)  # used_cpu_user at end
+    cpu_sys_delta = Column(Float, nullable=True)  # CPU sys consumed during monitoring
+    cpu_user_delta = Column(Float, nullable=True)  # CPU user consumed during monitoring
+    
     # Relationship to parent job
     job = relationship("MonitorJob", back_populates="shards")
 
@@ -112,6 +129,14 @@ class RedisCommand(CommandBase):
     key_pattern = Column(String, nullable=True, index=True)
     key_size_bytes = Column(Integer, nullable=True)
     
+    # NEW: Derived insight fields
+    arg_shape = Column(String, nullable=True)  # e.g., "0 -1", "NX EX 300", "MATCH * COUNT 100"
+    command_signature = Column(String, nullable=True, index=True)  # e.g., "LRANGE | user:{ID}:feed | 0 -1"
+    
+    # Flags for quick filtering
+    is_full_scan = Column(Integer, default=0)  # 1 if KEYS *, SCAN, LRANGE 0 -1, etc.
+    is_lock_op = Column(Integer, default=0)    # 1 if SETNX, SET NX, WATCH, etc.
+    
     args_json = Column(Text, nullable=True)
     raw_line = Column(Text, nullable=True)
     
@@ -119,6 +144,8 @@ class RedisCommand(CommandBase):
     __table_args__ = (
         Index('ix_commands_shard_cmd', 'shard_name', 'command'),
         Index('ix_commands_pattern', 'key_pattern'),
+        Index('ix_commands_signature', 'command_signature'),
+        Index('ix_commands_client_sig', 'client_ip', 'command_signature'),
     )
 
 

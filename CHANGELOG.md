@@ -4,6 +4,38 @@ All notable changes to the Redis Hot Shard Debugger Web UI.
 
 ---
 
+## Session: December 28, 2025
+
+### Features Added
+
+#### 1. **Redis Server Info via INFO Snapshot**
+- Added one-time `INFO` capture at start and end of monitoring for each shard
+- **Redis Version**: Captured from `INFO SERVER`, displayed as a badge on shard cards (e.g., `v7.0.7`)
+- **Memory Stats**: Captured from `INFO MEMORY` at end of monitoring:
+  - `used_memory`: Current memory used
+  - `maxmemory`: Max configured memory (0 = no limit)
+  - `used_memory_peak`: Peak memory usage
+  - `used_memory_rss`: OS-level RSS memory
+- Memory displayed as a progress bar with percentage, color-coded:
+  - Green: < 60% usage
+  - Amber: 60-80% usage
+  - Red: > 80% usage
+- **CPU Metrics**: Captured at start and end:
+  - `used_cpu_sys`, `used_cpu_user` values
+  - Calculates delta (total CPU time consumed during monitoring)
+  - Color-coded amber for high CPU usage (> 5 seconds)
+  - Hover tooltip shows sys vs user breakdown
+- Minimal overhead: only 3 extra INFO calls per shard (server at start, cpu at start, cpu+memory at end)
+
+#### 2. **Auto-Migration for Database Schema**
+- Added automatic schema migration for both metadata DB and per-job DBs
+- New columns added transparently when accessing existing databases
+- Supports older jobs without breaking (missing data shows as "—")
+- Migration for `monitor_shards`: redis_version, memory_used_bytes, memory_max_bytes, memory_peak_bytes, memory_rss_bytes, cpu_sys_start, cpu_user_start, cpu_sys_end, cpu_user_end, cpu_sys_delta, cpu_user_delta
+- Migration for `redis_commands`: arg_shape, command_signature, is_full_scan, is_lock_op
+
+---
+
 ## Session: December 27, 2025
 
 ### Features Added

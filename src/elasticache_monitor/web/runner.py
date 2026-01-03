@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from .db import get_db_context, get_job_db_context, init_job_db
 from .models import MonitorJob, MonitorShard, RedisCommand, KeySizeCache, JobStatus, ShardStatus
+from .signatures import classify_command
 from ..endpoints import get_replica_endpoints, get_all_endpoints
 from ..utils import extract_key_pattern
 
@@ -41,6 +42,21 @@ class WebShardMonitor:
         self.end_time = None
         self.error = None
         
+        # Redis server info (captured at start)
+        self.redis_version = None
+        
+        # Memory info (captured at end)
+        self.memory_used = None
+        self.memory_max = None
+        self.memory_peak = None
+        self.memory_rss = None
+        
+        # CPU metrics from INFO (captured at start and end)
+        self.cpu_sys_start = None
+        self.cpu_user_start = None
+        self.cpu_sys_end = None
+        self.cpu_user_end = None
+        
         # Batch for database inserts - larger batch = faster inserts
         self.batch = []
         self.batch_size = 500
@@ -55,7 +71,7 @@ class WebShardMonitor:
                 password=self.password,
                 ssl=True,
                 ssl_cert_reqs=None,
-                decode_responses=False,
+                decode_responses=True,  # Need string responses for INFO parsing
                 socket_connect_timeout=10,
                 socket_keepalive=True
             )
@@ -66,6 +82,49 @@ class WebShardMonitor:
             self.error = str(e)
             logger.error(f"{self.shard_name}: Connection FAILED - {e}")
             return None
+    
+    def _capture_cpu_info(self, client: redis.Redis) -> tuple:
+        """Capture CPU metrics from INFO command.
+        
+        Returns (cpu_sys, cpu_user) or (None, None) on error.
+        """
+        try:
+            info = client.info('cpu')
+            cpu_sys = info.get('used_cpu_sys', 0.0)
+            cpu_user = info.get('used_cpu_user', 0.0)
+            return cpu_sys, cpu_user
+        except Exception as e:
+            logger.debug(f"{self.shard_name}: Could not get CPU info: {e}")
+            return None, None
+    
+    def _capture_server_info(self, client: redis.Redis) -> str:
+        """Capture Redis version from INFO server.
+        
+        Returns redis_version string or None on error.
+        """
+        try:
+            info = client.info('server')
+            return info.get('redis_version')
+        except Exception as e:
+            logger.debug(f"{self.shard_name}: Could not get server info: {e}")
+            return None
+    
+    def _capture_memory_info(self, client: redis.Redis) -> dict:
+        """Capture memory metrics from INFO memory.
+        
+        Returns dict with used, max, peak, rss (all in bytes) or empty dict on error.
+        """
+        try:
+            info = client.info('memory')
+            return {
+                'used': info.get('used_memory', 0),
+                'max': info.get('maxmemory', 0),  # 0 means no limit
+                'peak': info.get('used_memory_peak', 0),
+                'rss': info.get('used_memory_rss', 0)
+            }
+        except Exception as e:
+            logger.debug(f"{self.shard_name}: Could not get memory info: {e}")
+            return {}
     
     def monitor(self):
         """Run MONITOR command and collect data."""
@@ -85,11 +144,24 @@ class WebShardMonitor:
                     shard.error_message = self.error
             return
         
+        # Capture server info at start (one-time INFO snapshot)
+        self.redis_version = self._capture_server_info(client)
+        if self.redis_version:
+            logger.info(f"{self.shard_name}: Redis version {self.redis_version}")
+        
+        # Capture CPU info at start (one-time INFO snapshot)
+        self.cpu_sys_start, self.cpu_user_start = self._capture_cpu_info(client)
+        if self.cpu_sys_start is not None:
+            logger.info(f"{self.shard_name}: CPU at start - sys: {self.cpu_sys_start:.2f}s, user: {self.cpu_user_start:.2f}s")
+        
         # Update to monitoring status
         with get_db_context() as db:
             shard = db.query(MonitorShard).filter(MonitorShard.id == self.shard_id).first()
             if shard:
                 shard.status = ShardStatus.monitoring
+                shard.redis_version = self.redis_version
+                shard.cpu_sys_start = self.cpu_sys_start
+                shard.cpu_user_start = self.cpu_user_start
         
         logger.info(f"Starting monitor on {self.shard_name} ({self.host}:{self.port}) for {self.duration}s...")
         self.start_time = time.time()
@@ -121,6 +193,20 @@ class WebShardMonitor:
             self.end_time = time.time()
             actual_duration = (self.end_time - self.start_time) if self.start_time else 0
             
+            # Capture CPU info at end (one-time INFO snapshot)
+            self.cpu_sys_end, self.cpu_user_end = self._capture_cpu_info(client)
+            if self.cpu_sys_end is not None:
+                logger.info(f"{self.shard_name}: CPU at end - sys: {self.cpu_sys_end:.2f}s, user: {self.cpu_user_end:.2f}s")
+            
+            # Capture memory info at end
+            mem_info = self._capture_memory_info(client)
+            if mem_info:
+                self.memory_used = mem_info.get('used')
+                self.memory_max = mem_info.get('max')
+                self.memory_peak = mem_info.get('peak')
+                self.memory_rss = mem_info.get('rss')
+                logger.info(f"{self.shard_name}: Memory - used: {self.memory_used / 1024 / 1024:.1f}MB, peak: {self.memory_peak / 1024 / 1024:.1f}MB")
+            
             logger.info(f"{self.shard_name}: Monitor ended - actual duration: {actual_duration:.1f}s, commands: {self.command_count}")
             
             if self.command_count == 0:
@@ -144,6 +230,14 @@ class WebShardMonitor:
             duration = actual_duration
             qps = self.command_count / duration if duration > 0 else 0
             
+            # Calculate CPU deltas
+            cpu_sys_delta = None
+            cpu_user_delta = None
+            if self.cpu_sys_start is not None and self.cpu_sys_end is not None:
+                cpu_sys_delta = self.cpu_sys_end - self.cpu_sys_start
+                cpu_user_delta = self.cpu_user_end - self.cpu_user_start
+                logger.info(f"{self.shard_name}: CPU delta - sys: {cpu_sys_delta:.2f}s, user: {cpu_user_delta:.2f}s (total: {cpu_sys_delta + cpu_user_delta:.2f}s)")
+            
             with get_db_context() as db:
                 shard = db.query(MonitorShard).filter(MonitorShard.id == self.shard_id).first()
                 if shard:
@@ -151,6 +245,16 @@ class WebShardMonitor:
                     shard.completed_at = datetime.utcnow()
                     shard.command_count = self.command_count
                     shard.qps = qps
+                    # Store CPU metrics
+                    shard.cpu_sys_end = self.cpu_sys_end
+                    shard.cpu_user_end = self.cpu_user_end
+                    shard.cpu_sys_delta = cpu_sys_delta
+                    shard.cpu_user_delta = cpu_user_delta
+                    # Store memory metrics
+                    shard.memory_used_bytes = self.memory_used
+                    shard.memory_max_bytes = self.memory_max
+                    shard.memory_peak_bytes = self.memory_peak
+                    shard.memory_rss_bytes = self.memory_rss
                     if self.error:
                         shard.error_message = self.error
             
@@ -184,6 +288,11 @@ class WebShardMonitor:
                 pattern = extract_key_pattern(key)
                 self.key_patterns[pattern] += 1
             
+            # Generate command signature and classify
+            signature, arg_shape, is_full_scan, is_lock_op = classify_command(
+                cmd_name, pattern, parts
+            )
+            
             # Add to batch (no job_id needed - it's per-job DB now)
             self.batch.append({
                 'shard_name': self.shard_name,
@@ -194,6 +303,10 @@ class WebShardMonitor:
                 'command': cmd_name,
                 'key': key[:500] if key else None,
                 'key_pattern': pattern,
+                'arg_shape': arg_shape,
+                'command_signature': signature,
+                'is_full_scan': 1 if is_full_scan else 0,
+                'is_lock_op': 1 if is_lock_op else 0,
                 'args_json': json.dumps(parts[1:]) if len(parts) > 1 else None,
                 'raw_line': str(command)[:1000]
             })

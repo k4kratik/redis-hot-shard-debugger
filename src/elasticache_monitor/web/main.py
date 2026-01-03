@@ -581,6 +581,24 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
     
     shards_status = []
     for shard in job.shards:
+        # Calculate total CPU delta (user + sys)
+        cpu_total = None
+        cpu_pct = None  # CPU utilization as percentage of wall time
+        cpu_per_1k = None  # CPU ms per 1000 commands
+        if shard.cpu_sys_delta is not None and shard.cpu_user_delta is not None:
+            cpu_total = shard.cpu_sys_delta + shard.cpu_user_delta
+            # CPU % = (cpu_seconds / duration_seconds) * 100
+            if job.duration_seconds > 0:
+                cpu_pct = (cpu_total / job.duration_seconds) * 100
+            # CPU per 1K commands (in milliseconds)
+            if shard.command_count > 0:
+                cpu_per_1k = (cpu_total * 1000) / (shard.command_count / 1000)
+        
+        # Calculate memory usage percentage
+        memory_pct = None
+        if shard.memory_used_bytes and shard.memory_max_bytes and shard.memory_max_bytes > 0:
+            memory_pct = (shard.memory_used_bytes / shard.memory_max_bytes) * 100
+        
         shards_status.append({
             "shard_name": shard.shard_name,
             "host": shard.host,
@@ -588,7 +606,21 @@ async def get_job_status(job_id: str, db: Session = Depends(get_db)):
             "status": shard.status.value,
             "command_count": shard.command_count,
             "qps": shard.qps,
-            "error": shard.error_message
+            "error": shard.error_message,
+            # Redis info
+            "redis_version": shard.redis_version,
+            # Memory info
+            "memory_used": shard.memory_used_bytes,
+            "memory_max": shard.memory_max_bytes,
+            "memory_peak": shard.memory_peak_bytes,
+            "memory_rss": shard.memory_rss_bytes,
+            "memory_pct": memory_pct,
+            # CPU info
+            "cpu_sys_delta": shard.cpu_sys_delta,
+            "cpu_user_delta": shard.cpu_user_delta,
+            "cpu_total": cpu_total,
+            "cpu_pct": cpu_pct,  # CPU utilization %
+            "cpu_per_1k": cpu_per_1k  # CPU ms per 1K commands
         })
     
     # Calculate actual commands from job-specific database for accuracy
@@ -750,6 +782,152 @@ async def get_job_stats(job_id: str, db: Session = Depends(get_db)):
         "top_patterns": top_patterns,
         "pattern_by_shard": pattern_by_shard
     }
+
+
+@app.get("/api/jobs/{job_id}/insights")
+async def get_job_insights(job_id: str, db: Session = Depends(get_db)):
+    """
+    Get aggregated insights for a job - hot shards, abuse patterns, lock contention, full scans.
+    Optimized for fast dashboard rendering.
+    """
+    job = db.query(MonitorJob).filter(MonitorJob.id == job_id).first()
+    
+    if not job or job.status.value != 'completed' or not job_db_exists(job_id):
+        return JSONResponse({"error": "Job not found or not completed"}, status_code=404)
+    
+    insights = {
+        "total_commands": job.total_commands or 0,
+        "hot_shards": [],
+        "top_signatures": [],
+        "abuse_combos": [],
+        "lock_stats": {"count": 0, "percentage": 0, "top_patterns": []},
+        "full_scan_stats": {"count": 0, "percentage": 0, "top_patterns": []},
+        "signature_by_shard": {}
+    }
+    
+    with get_job_db_context(job_id) as job_db:
+        total = job.total_commands or 1
+        
+        # 1. Hot shards analysis (deviation from average)
+        shard_counts = job_db.execute(text("""
+            SELECT shard_name, COUNT(*) as cnt 
+            FROM redis_commands 
+            GROUP BY shard_name 
+            ORDER BY cnt DESC
+        """)).fetchall()
+        
+        if shard_counts:
+            counts = [r[1] for r in shard_counts]
+            avg_count = sum(counts) / len(counts)
+            
+            for shard_name, cnt in shard_counts:
+                deviation = ((cnt - avg_count) / avg_count * 100) if avg_count > 0 else 0
+                status = "hot" if deviation > 25 else "normal" if deviation > -25 else "cold"
+                insights["hot_shards"].append({
+                    "shard": shard_name,
+                    "count": cnt,
+                    "percentage": round(cnt / total * 100, 1),
+                    "deviation": round(deviation, 1),
+                    "status": status
+                })
+        
+        # 2. Top command signatures (aggregated patterns)
+        top_sigs = job_db.execute(text("""
+            SELECT command_signature, COUNT(*) as cnt,
+                   SUM(is_full_scan) as scan_count,
+                   SUM(is_lock_op) as lock_count
+            FROM redis_commands 
+            WHERE command_signature IS NOT NULL
+            GROUP BY command_signature 
+            ORDER BY cnt DESC 
+            LIMIT 20
+        """)).fetchall()
+        
+        for sig, cnt, scan_cnt, lock_cnt in top_sigs:
+            insights["top_signatures"].append({
+                "signature": sig,
+                "count": cnt,
+                "percentage": round(cnt / total * 100, 2),
+                "has_scans": (scan_cnt or 0) > 0,
+                "has_locks": (lock_cnt or 0) > 0
+            })
+        
+        # 3. Abuse combos: (client_ip + signature) - find heavy hitters
+        abuse_combos = job_db.execute(text("""
+            SELECT client_ip, command_signature, COUNT(*) as cnt
+            FROM redis_commands 
+            WHERE client_ip IS NOT NULL AND command_signature IS NOT NULL
+            GROUP BY client_ip, command_signature 
+            ORDER BY cnt DESC 
+            LIMIT 15
+        """)).fetchall()
+        
+        for ip, sig, cnt in abuse_combos:
+            insights["abuse_combos"].append({
+                "client_ip": ip,
+                "signature": sig,
+                "count": cnt,
+                "percentage": round(cnt / total * 100, 2)
+            })
+        
+        # 4. Lock operations stats
+        lock_stats = job_db.execute(text("""
+            SELECT COUNT(*) as cnt FROM redis_commands WHERE is_lock_op = 1
+        """)).fetchone()
+        lock_count = lock_stats[0] if lock_stats else 0
+        
+        lock_patterns = job_db.execute(text("""
+            SELECT command_signature, COUNT(*) as cnt
+            FROM redis_commands 
+            WHERE is_lock_op = 1 AND command_signature IS NOT NULL
+            GROUP BY command_signature 
+            ORDER BY cnt DESC 
+            LIMIT 5
+        """)).fetchall()
+        
+        insights["lock_stats"] = {
+            "count": lock_count,
+            "percentage": round(lock_count / total * 100, 2),
+            "top_patterns": [{"signature": p[0], "count": p[1]} for p in lock_patterns]
+        }
+        
+        # 5. Full scan stats
+        scan_stats = job_db.execute(text("""
+            SELECT COUNT(*) as cnt FROM redis_commands WHERE is_full_scan = 1
+        """)).fetchone()
+        scan_count = scan_stats[0] if scan_stats else 0
+        
+        scan_patterns = job_db.execute(text("""
+            SELECT command_signature, COUNT(*) as cnt
+            FROM redis_commands 
+            WHERE is_full_scan = 1 AND command_signature IS NOT NULL
+            GROUP BY command_signature 
+            ORDER BY cnt DESC 
+            LIMIT 5
+        """)).fetchall()
+        
+        insights["full_scan_stats"] = {
+            "count": scan_count,
+            "percentage": round(scan_count / total * 100, 2),
+            "top_patterns": [{"signature": p[0], "count": p[1]} for p in scan_patterns]
+        }
+        
+        # 6. Signature distribution by shard (for charts)
+        sig_by_shard = job_db.execute(text("""
+            SELECT shard_name, command_signature, COUNT(*) as cnt
+            FROM redis_commands 
+            WHERE command_signature IS NOT NULL
+            GROUP BY shard_name, command_signature 
+            ORDER BY cnt DESC
+            LIMIT 100
+        """)).fetchall()
+        
+        for shard, sig, cnt in sig_by_shard:
+            if shard not in insights["signature_by_shard"]:
+                insights["signature_by_shard"][shard] = {}
+            insights["signature_by_shard"][shard][sig] = cnt
+    
+    return insights
 
 
 @app.post("/api/jobs/{job_id}/sample-sizes")
@@ -1017,9 +1195,10 @@ async def job_timeline(
     shards = db.query(MonitorShard).filter(MonitorShard.job_id == job_id).all()
     shard_names = sorted([s.shard_name for s in shards])
     
-    # Get unique commands and patterns from the job database
+    # Get unique commands, patterns, and signatures from the job database
     commands = []
     patterns = []
+    signatures = []
     
     if job_db_exists(job_id):
         with get_job_db_context(job_id) as job_db:
@@ -1039,6 +1218,17 @@ async def job_timeline(
                    LIMIT 50"""
             ))
             patterns = [row[0] for row in pattern_result.fetchall()]
+            
+            # Get top signatures
+            sig_result = job_db.execute(text(
+                """SELECT command_signature, COUNT(*) as cnt 
+                   FROM redis_commands 
+                   WHERE command_signature IS NOT NULL 
+                   GROUP BY command_signature 
+                   ORDER BY cnt DESC 
+                   LIMIT 50"""
+            ))
+            signatures = [row[0] for row in sig_result.fetchall()]
     
     return templates.TemplateResponse("timeline.html", {
         "request": request,
@@ -1046,6 +1236,7 @@ async def job_timeline(
         "shards": shard_names,
         "commands": commands,
         "patterns": patterns,
+        "signatures": signatures,
         "page_title": f"Timeline - {job.name or job.replication_group_id}"
     })
 
@@ -1053,9 +1244,9 @@ async def job_timeline(
 @app.get("/api/jobs/{job_id}/timeline-data")
 async def get_timeline_data(
     job_id: str,
-    group_by: str = "command",  # command, client_ip, key_pattern, key
+    group_by: str = "command_signature",  # command_signature, command, client_ip, key_pattern
     shards: Optional[str] = None,  # comma-separated shard names
-    filter_value: Optional[str] = None,  # specific command/pattern/key to filter
+    filter_value: Optional[str] = None,  # specific signature/command/pattern to filter
     granularity: int = 1,  # seconds per bucket
     db: Session = Depends(get_db)
 ):
@@ -1073,11 +1264,11 @@ async def get_timeline_data(
     with get_job_db_context(job_id) as job_db:
         # Build the query based on group_by
         group_column = {
+            "command_signature": "command_signature",
             "command": "command",
             "client_ip": "client_ip", 
-            "key_pattern": "key_pattern",
-            "key": "key"
-        }.get(group_by, "command")
+            "key_pattern": "key_pattern"
+        }.get(group_by, "command_signature")
         
         # Build WHERE clause
         where_clauses = ["1=1"]

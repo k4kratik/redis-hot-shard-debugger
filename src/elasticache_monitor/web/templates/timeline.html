@@ -41,10 +41,10 @@
                     <label class="block text-sm font-medium text-slate-300 mb-2">Group By</label>
                     <select x-model="groupBy" @change="fetchData()" 
                             class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent">
+                        <option value="command_signature">Command Signature</option>
                         <option value="command">Command Type</option>
                         <option value="client_ip">Client IP</option>
                         <option value="key_pattern">Key Pattern</option>
-                        <option value="key">Individual Key</option>
                     </select>
                 </div>
 
@@ -106,16 +106,15 @@
                                list="filter-suggestions"
                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent">
                         <datalist id="filter-suggestions">
-                            <template x-if="groupBy === 'command'">
-                                {% for cmd in commands %}
-                                <option value="{{ cmd }}">
-                                {% endfor %}
-                            </template>
-                            <template x-if="groupBy === 'key_pattern'">
-                                {% for pattern in patterns %}
-                                <option value="{{ pattern }}">
-                                {% endfor %}
-                            </template>
+                            {% for sig in signatures %}
+                            <option value="{{ sig }}">
+                            {% endfor %}
+                            {% for cmd in commands %}
+                            <option value="{{ cmd }}">
+                            {% endfor %}
+                            {% for pattern in patterns %}
+                            <option value="{{ pattern }}">
+                            {% endfor %}
                         </datalist>
                         <button x-show="filterValue" @click="filterValue = ''; fetchData()" 
                                 class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
@@ -205,7 +204,51 @@
                     <canvas id="timelineChart"></canvas>
                 </div>
                 <div class="mt-4 text-xs text-slate-500 text-center">
-                    💡 Click legend items to show/hide • Right-click to isolate
+                    💡 Click legend items to show/hide • Right-click to isolate • Click bars to explain spike
+                </div>
+            </div>
+
+            <!-- Spike Explanation Panel -->
+            <div x-show="selectedSpike" x-transition class="mt-4 p-4 bg-slate-800 rounded-lg border border-purple-500/30">
+                <div class="flex items-center justify-between mb-3">
+                    <h4 class="font-semibold text-purple-300 flex items-center gap-2">
+                        <span>📊</span> Spike Analysis @ <span x-text="selectedSpike?.time"></span>
+                    </h4>
+                    <button @click="selectedSpike = null" class="text-slate-400 hover:text-white">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                        <div class="text-slate-400">Total at point</div>
+                        <div class="text-xl font-bold text-white" x-text="selectedSpike?.total?.toLocaleString()"></div>
+                    </div>
+                    <div>
+                        <div class="text-slate-400">Top contributor</div>
+                        <div class="font-mono text-purple-300 truncate" x-text="selectedSpike?.topContributor" :title="selectedSpike?.topContributor"></div>
+                    </div>
+                    <div>
+                        <div class="text-slate-400">Contribution</div>
+                        <div class="text-white" x-text="selectedSpike?.topPercentage + '%'"></div>
+                    </div>
+                    <div>
+                        <div class="text-slate-400">Deviation from avg</div>
+                        <div class="font-bold" :class="selectedSpike?.deviation > 50 ? 'text-red-400' : selectedSpike?.deviation > 0 ? 'text-amber-400' : 'text-emerald-400'"
+                             x-text="(selectedSpike?.deviation > 0 ? '+' : '') + selectedSpike?.deviation?.toFixed(1) + '%'"></div>
+                    </div>
+                </div>
+                <div x-show="selectedSpike?.breakdown?.length > 0" class="mt-3 pt-3 border-t border-slate-700">
+                    <div class="text-xs text-slate-400 mb-2">Breakdown:</div>
+                    <div class="flex flex-wrap gap-2">
+                        <template x-for="item in selectedSpike?.breakdown?.slice(0, 6)" :key="item.label">
+                            <span class="px-2 py-1 bg-slate-700 rounded text-xs">
+                                <span class="text-slate-300" x-text="item.label?.substring(0, 20)"></span>:
+                                <span class="text-white font-medium" x-text="item.value?.toLocaleString()"></span>
+                            </span>
+                        </template>
+                    </div>
                 </div>
             </div>
         </div>
@@ -249,16 +292,18 @@
 function timelineApp() {
     return {
         jobId: '{{ job.id }}',
-        groupBy: 'command',
+        groupBy: 'command_signature',  // Default to signature for insight density
         granularity: 1,
         selectedShards: [],
         filterValue: '',
         chartType: 'bar',
+        stackByShard: true,  // Default: stack by shard
         loading: true,
         error: null,
         summary: null,
         chart: null,
         chartData: null,
+        selectedSpike: null,  // For spike explanation
 
         init() {
             this.fetchData();
@@ -391,6 +436,53 @@ function timelineApp() {
                         this.chart.getDatasetMeta(i).hidden = allHidden ? false : (i !== datasetIndex);
                     });
                     this.chart.update();
+                }
+            });
+
+            // Add click to explain spike
+            ctx.addEventListener('click', (e) => {
+                const points = this.chart.getElementsAtEventForMode(e, 'index', { intersect: false }, false);
+                if (points.length > 0) {
+                    const dataIndex = points[0].index;
+                    const time = this.chartData.labels[dataIndex];
+                    
+                    // Calculate totals for this time point
+                    let total = 0;
+                    let breakdown = [];
+                    
+                    this.chart.data.datasets.forEach((ds, i) => {
+                        const meta = this.chart.getDatasetMeta(i);
+                        if (!meta.hidden) {
+                            const value = ds.data[dataIndex] || 0;
+                            total += value;
+                            breakdown.push({ label: ds.label, value: value });
+                        }
+                    });
+                    
+                    // Sort breakdown by value
+                    breakdown.sort((a, b) => b.value - a.value);
+                    
+                    // Calculate average across all time points
+                    const allTotals = this.chartData.labels.map((_, i) => {
+                        return this.chart.data.datasets.reduce((sum, ds) => {
+                            const meta = this.chart.getDatasetMeta(this.chart.data.datasets.indexOf(ds));
+                            return sum + (meta.hidden ? 0 : (ds.data[i] || 0));
+                        }, 0);
+                    });
+                    const avg = allTotals.reduce((a, b) => a + b, 0) / allTotals.length;
+                    const deviation = avg > 0 ? ((total - avg) / avg) * 100 : 0;
+                    
+                    const topContributor = breakdown[0]?.label || 'N/A';
+                    const topPercentage = total > 0 ? ((breakdown[0]?.value || 0) / total * 100).toFixed(1) : 0;
+                    
+                    this.selectedSpike = {
+                        time,
+                        total,
+                        topContributor,
+                        topPercentage,
+                        deviation,
+                        breakdown
+                    };
                 }
             });
         },
