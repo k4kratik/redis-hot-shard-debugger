@@ -40,8 +40,10 @@ app = FastAPI(
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-# Add version to template globals
+# Add version and utility functions to template globals
 templates.env.globals["app_version"] = __version__
+templates.env.globals["min"] = min
+templates.env.globals["max"] = max
 
 
 # Custom Jinja2 filters
@@ -240,9 +242,23 @@ async def create_job(
 # =============================================================================
 
 @app.get("/jobs", response_class=HTMLResponse)
-async def list_jobs(request: Request, db: Session = Depends(get_db)):
-    """List all monitoring jobs."""
-    jobs = db.query(MonitorJob).order_by(desc(MonitorJob.created_at)).all()
+async def list_jobs(
+    request: Request, 
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=10, le=100),
+    db: Session = Depends(get_db)
+):
+    """List all monitoring jobs with pagination."""
+    # Get total count
+    total_jobs = db.query(func.count(MonitorJob.id)).scalar()
+    total_pages = (total_jobs + per_page - 1) // per_page  # Ceiling division
+    
+    # Ensure page is within bounds
+    page = min(page, max(1, total_pages))
+    
+    # Get paginated jobs
+    offset = (page - 1) * per_page
+    jobs = db.query(MonitorJob).order_by(desc(MonitorJob.created_at)).offset(offset).limit(per_page).all()
     
     jobs_data = []
     for job in jobs:
@@ -260,7 +276,15 @@ async def list_jobs(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("jobs.html", {
         "request": request,
         "page_title": "Jobs",
-        "jobs": jobs_data
+        "jobs": jobs_data,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total_jobs": total_jobs,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
+        }
     })
 
 

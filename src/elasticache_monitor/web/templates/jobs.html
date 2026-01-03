@@ -24,9 +24,25 @@
     <div class="flex items-center justify-between">
         <div>
             <h1 class="text-2xl font-bold text-white">Monitoring Jobs</h1>
-            <p class="text-slate-400 text-sm mt-1">All ElastiCache monitoring sessions</p>
+            <p class="text-slate-400 text-sm mt-1">
+                {% if pagination.total_jobs > 0 %}
+                {{ pagination.total_jobs }} monitoring session{{ 's' if pagination.total_jobs != 1 else '' }}
+                {% else %}
+                All ElastiCache monitoring sessions
+                {% endif %}
+            </p>
         </div>
         <div class="flex items-center gap-3">
+            <!-- Per-page selector -->
+            {% if pagination.total_jobs > 10 %}
+            <select onchange="window.location.href='/jobs?page=1&per_page=' + this.value" 
+                    class="px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 text-sm focus:outline-none focus:border-slate-600">
+                <option value="10" {{ 'selected' if pagination.per_page == 10 else '' }}>10 per page</option>
+                <option value="20" {{ 'selected' if pagination.per_page == 20 else '' }}>20 per page</option>
+                <option value="50" {{ 'selected' if pagination.per_page == 50 else '' }}>50 per page</option>
+                <option value="100" {{ 'selected' if pagination.per_page == 100 else '' }}>100 per page</option>
+            </select>
+            {% endif %}
             <!-- Compare Button -->
             <button @click="goCompare()" 
                     x-show="selectedJobs.length >= 2"
@@ -186,6 +202,81 @@
         </div>
         {% endfor %}
     </div>
+    
+    <!-- Pagination -->
+    {% if pagination.total_pages > 1 %}
+    <div class="flex items-center justify-between mt-6">
+        <div class="text-sm text-slate-500">
+            Showing {{ (pagination.page - 1) * pagination.per_page + 1 }} - {{ min(pagination.page * pagination.per_page, pagination.total_jobs) }} of {{ pagination.total_jobs }} jobs
+        </div>
+        <div class="flex items-center gap-2">
+            <!-- Previous -->
+            {% if pagination.has_prev %}
+            <a href="/jobs?page={{ pagination.page - 1 }}&per_page={{ pagination.per_page }}" 
+               class="px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all text-sm flex items-center gap-1">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                </svg>
+                Prev
+            </a>
+            {% else %}
+            <span class="px-3 py-2 rounded-lg bg-slate-800/30 border border-slate-700/30 text-slate-600 text-sm flex items-center gap-1 cursor-not-allowed">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                </svg>
+                Prev
+            </span>
+            {% endif %}
+            
+            <!-- Page numbers -->
+            <div class="flex items-center gap-1">
+                {% set start_page = [1, pagination.page - 2]|max %}
+                {% set end_page = [pagination.total_pages, pagination.page + 2]|min %}
+                
+                {% if start_page > 1 %}
+                <a href="/jobs?page=1&per_page={{ pagination.per_page }}" class="px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all text-sm">1</a>
+                {% if start_page > 2 %}
+                <span class="px-2 text-slate-600">...</span>
+                {% endif %}
+                {% endif %}
+                
+                {% for p in range(start_page, end_page + 1) %}
+                {% if p == pagination.page %}
+                <span class="px-3 py-2 rounded-lg bg-redis-500/20 border border-redis-500/50 text-redis-400 text-sm font-medium">{{ p }}</span>
+                {% else %}
+                <a href="/jobs?page={{ p }}&per_page={{ pagination.per_page }}" class="px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all text-sm">{{ p }}</a>
+                {% endif %}
+                {% endfor %}
+                
+                {% if end_page < pagination.total_pages %}
+                {% if end_page < pagination.total_pages - 1 %}
+                <span class="px-2 text-slate-600">...</span>
+                {% endif %}
+                <a href="/jobs?page={{ pagination.total_pages }}&per_page={{ pagination.per_page }}" class="px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all text-sm">{{ pagination.total_pages }}</a>
+                {% endif %}
+            </div>
+            
+            <!-- Next -->
+            {% if pagination.has_next %}
+            <a href="/jobs?page={{ pagination.page + 1 }}&per_page={{ pagination.per_page }}" 
+               class="px-3 py-2 rounded-lg bg-slate-800/50 border border-slate-700/50 text-slate-300 hover:bg-slate-700/50 hover:text-white transition-all text-sm flex items-center gap-1">
+                Next
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+            </a>
+            {% else %}
+            <span class="px-3 py-2 rounded-lg bg-slate-800/30 border border-slate-700/30 text-slate-600 text-sm flex items-center gap-1 cursor-not-allowed">
+                Next
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+            </span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    
     {% else %}
     <div class="glass-card rounded-2xl p-12 text-center">
         <svg class="w-16 h-16 mx-auto text-slate-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
