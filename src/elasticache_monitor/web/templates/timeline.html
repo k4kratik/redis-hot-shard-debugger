@@ -170,7 +170,7 @@
                 </div>
 
                 <div x-show="!loading && !error" class="mt-3 text-xs text-slate-500 text-center">
-                    💡 Click legend to toggle • Click chart bar/point to see breakdown
+                    Click legend to focus • Shift+click to hide • Click chart to see breakdown
                 </div>
             </div>
 
@@ -956,6 +956,34 @@ function timelineApp() {
                                     usePointStyle: true, 
                                     padding: 15,
                                     boxWidth: 8
+                                },
+                                onClick: (e, legendItem, legend) => {
+                                    const chart = legend.chart;
+                                    const ci = legendItem.datasetIndex;
+                                    const meta = chart.getDatasetMeta(ci);
+                                    
+                                    // Shift+click = toggle hide (original behavior)
+                                    if (e.native.shiftKey) {
+                                        meta.hidden = !meta.hidden;
+                                    } else {
+                                        // Single click = focus behavior
+                                        const allOthersHidden = chart.data.datasets.every((ds, i) => 
+                                            i === ci ? true : chart.getDatasetMeta(i).hidden
+                                        );
+                                        
+                                        if (allOthersHidden && !meta.hidden) {
+                                            // Clicking the only visible item -> show all
+                                            chart.data.datasets.forEach((ds, i) => {
+                                                chart.getDatasetMeta(i).hidden = false;
+                                            });
+                                        } else {
+                                            // Focus: show only clicked, hide all others
+                                            chart.data.datasets.forEach((ds, i) => {
+                                                chart.getDatasetMeta(i).hidden = (i !== ci);
+                                            });
+                                        }
+                                    }
+                                    chart.update();
                                 }
                             },
                             tooltip: {

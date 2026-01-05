@@ -140,6 +140,9 @@
                     <!-- Canvas - always in DOM, use x-ref instead of id -->
                     <canvas x-ref="shardCanvas" class="w-full h-full"></canvas>
                 </div>
+                <div x-show="!loading" class="mt-2 text-xs text-slate-500 text-center">
+                    Click legend to focus • Shift+click to hide
+                </div>
             </div>
 
             <!-- Breakdown Table -->
@@ -773,6 +776,34 @@ function shardDistributionApp() {
                                     boxWidth: 12,
                                     padding: 15,
                                     font: { size: 11 }
+                                },
+                                onClick: (e, legendItem, legend) => {
+                                    const chart = legend.chart;
+                                    const ci = legendItem.datasetIndex;
+                                    const meta = chart.getDatasetMeta(ci);
+                                    
+                                    // Shift+click = toggle hide (original behavior)
+                                    if (e.native.shiftKey) {
+                                        meta.hidden = !meta.hidden;
+                                    } else {
+                                        // Single click = focus behavior
+                                        const allOthersHidden = chart.data.datasets.every((ds, i) => 
+                                            i === ci ? true : chart.getDatasetMeta(i).hidden
+                                        );
+                                        
+                                        if (allOthersHidden && !meta.hidden) {
+                                            // Clicking the only visible item -> show all
+                                            chart.data.datasets.forEach((ds, i) => {
+                                                chart.getDatasetMeta(i).hidden = false;
+                                            });
+                                        } else {
+                                            // Focus: show only clicked, hide all others
+                                            chart.data.datasets.forEach((ds, i) => {
+                                                chart.getDatasetMeta(i).hidden = (i !== ci);
+                                            });
+                                        }
+                                    }
+                                    chart.update();
                                 }
                             },
                             tooltip: {

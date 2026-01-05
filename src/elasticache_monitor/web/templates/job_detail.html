@@ -247,6 +247,9 @@
         <div x-show="statsLoaded" x-transition class="h-[250px]">
             <canvas id="shardChart"></canvas>
         </div>
+        <div x-show="statsLoaded && viewMode !== 'total'" class="mt-2 text-xs text-slate-500 text-center">
+            Click legend to focus • Shift+click to hide
+        </div>
     </div>
 
     <!-- Insights Row -->
@@ -596,7 +599,30 @@
                         type: 'bar', data: totalData,
                         options: {
                             responsive: true, maintainAspectRatio: false,
-                            plugins: { legend: { display: false, position: 'bottom', labels: { color: '#94a3b8', boxWidth: 12, padding: 8 } }, tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${item.raw.toLocaleString()}` } } },
+                            plugins: { 
+                                legend: { 
+                                    display: false, 
+                                    position: 'bottom', 
+                                    labels: { color: '#94a3b8', boxWidth: 12, padding: 8 },
+                                    onClick: (e, legendItem, legend) => {
+                                        const chart = legend.chart;
+                                        const ci = legendItem.datasetIndex;
+                                        const meta = chart.getDatasetMeta(ci);
+                                        if (e.native.shiftKey) {
+                                            meta.hidden = !meta.hidden;
+                                        } else {
+                                            const allOthersHidden = chart.data.datasets.every((ds, i) => i === ci ? true : chart.getDatasetMeta(i).hidden);
+                                            if (allOthersHidden && !meta.hidden) {
+                                                chart.data.datasets.forEach((ds, i) => { chart.getDatasetMeta(i).hidden = false; });
+                                            } else {
+                                                chart.data.datasets.forEach((ds, i) => { chart.getDatasetMeta(i).hidden = (i !== ci); });
+                                            }
+                                        }
+                                        chart.update();
+                                    }
+                                }, 
+                                tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${item.raw.toLocaleString()}` } } 
+                            },
                             scales: { y: { beginAtZero: true, stacked: false, grid: { color: 'rgba(148, 163, 184, 0.1)' }, ticks: { color: '#94a3b8' } }, x: { stacked: false, grid: { display: false }, ticks: { color: '#94a3b8' } } }
                         }
                     });
