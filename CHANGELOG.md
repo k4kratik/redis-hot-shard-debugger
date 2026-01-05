@@ -6,6 +6,32 @@ All notable changes to the ElastiCache Hot Shard Debugger Web UI.
 
 ## Session: January 6, 2026
 
+### Feature: SQL Editor with Syntax Highlighting (Ace Editor)
+
+#### Problem
+- Previous overlay-based syntax highlighting caused cursor position issues
+- CodeMirror ES module loading was unreliable
+
+#### Solution
+- Integrated **Ace Editor** - a battle-tested code editor used by GitHub, Cloud9, etc.
+- Single script includes that load reliably
+
+#### Features
+- **Full SQL syntax highlighting** - keywords (purple), strings (green), numbers (yellow)
+- **Line numbers** in gutter
+- **Proper cursor positioning** - clicking works correctly
+- **Ctrl+Enter / Cmd+Enter** to run queries
+- **Shift+Alt+F** to format/beautify SQL
+- **Format button** - one-click SQL beautification (uppercase keywords, proper indentation)
+- **Resizable editor** - drag bottom-right corner to resize (150px - 600px)
+- **Dark "One Dark" theme** matching app design
+- **Active line highlighting**
+
+#### Files Changed
+- `src/elasticache_monitor/web/templates/query.html`
+
+---
+
 ### UI Consistency: SQL Query Page Layout
 
 #### Fixed

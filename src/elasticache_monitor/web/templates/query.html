@@ -1,18 +1,144 @@
 {% extends "base.html" %}
 
 {% block content %}
+<!-- Ace Editor -->
+<script src="https://cdn.jsdelivr.net/npm/ace-builds@1.32.2/src-min-noconflict/ace.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/ace-builds@1.32.2/src-min-noconflict/mode-sql.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/ace-builds@1.32.2/src-min-noconflict/theme-one_dark.min.js"></script>
+<!-- SQL Formatter -->
+<script src="https://cdn.jsdelivr.net/npm/sql-formatter@15.3.1/dist/sql-formatter.min.js"></script>
+
+<style>
+    #sql-editor-container {
+        resize: vertical;
+        overflow: hidden;
+        min-height: 150px;
+        max-height: 600px;
+        height: 200px;
+    }
+    #sql-editor {
+        width: 100%;
+        height: 100%;
+        font-size: 14px;
+        border-radius: 0.75rem;
+    }
+    .ace_editor {
+        border-radius: 0.75rem;
+    }
+    /* Resize handle styling */
+    #sql-editor-container::-webkit-resizer {
+        background: linear-gradient(135deg, transparent 50%, #64748b 50%, #64748b 60%, transparent 60%),
+                    linear-gradient(135deg, transparent 50%, #64748b 50%, #64748b 60%, transparent 60%);
+        background-size: 8px 8px;
+        background-position: bottom right, bottom 4px right 4px;
+        background-repeat: no-repeat;
+        cursor: ns-resize;
+    }
+    /* Custom colors for One Dark theme adjustments */
+    .ace-one-dark .ace_gutter {
+        background: rgba(30, 41, 59, 0.8);
+        color: #64748b;
+    }
+    .ace-one-dark .ace_gutter-active-line {
+        background: rgba(30, 41, 59, 1);
+    }
+    .ace-one-dark {
+        background: rgba(15, 23, 42, 0.95);
+    }
+    .ace-one-dark .ace_cursor {
+        color: #10b981;
+    }
+    .ace-one-dark .ace_marker-layer .ace_selection {
+        background: rgba(16, 185, 129, 0.2);
+    }
+</style>
+
 <script>
 function queryPage() {
     return {
         selectedJobId: '{{ selected_job_id or '' }}',
-        sql: `{{ sql | e }}` || '',
-        highlightedSQL: '',
-        lineCount: 1,
+        sql: `{{ sql | default('SELECT * FROM redis_commands LIMIT 10', true) | e }}`,
         runningQuery: null,
+        editor: null,
         
         init() {
-            // Ensure highlighting runs after DOM is ready
-            this.$nextTick(() => this.updateHighlight());
+            // Initialize Ace editor when component mounts
+            this.$nextTick(() => {
+                if (typeof ace !== 'undefined') {
+                    this.initAceEditor();
+                }
+            });
+        },
+        
+        initAceEditor() {
+            const editorEl = document.getElementById('sql-editor');
+            if (!editorEl || this.editor) return;
+            
+            this.editor = ace.edit('sql-editor');
+            this.editor.setTheme('ace/theme/one_dark');
+            this.editor.session.setMode('ace/mode/sql');
+            this.editor.setValue(this.sql, -1);
+            this.editor.setOptions({
+                fontSize: '14px',
+                showPrintMargin: false,
+                tabSize: 2,
+                useSoftTabs: true,
+                wrap: true,
+                highlightActiveLine: true,
+                showGutter: true
+            });
+            
+            // Sync editor content to hidden input
+            const hiddenInput = document.getElementById('sql-hidden');
+            this.editor.session.on('change', () => {
+                this.sql = this.editor.getValue();
+                if (hiddenInput) hiddenInput.value = this.sql;
+            });
+            
+            // Ctrl+Enter to submit
+            this.editor.commands.addCommand({
+                name: 'submitQuery',
+                bindKey: { win: 'Ctrl-Enter', mac: 'Cmd-Enter' },
+                exec: () => {
+                    const form = document.getElementById('sql-form');
+                    if (form && this.selectedJobId) form.submit();
+                }
+            });
+            
+            // Shift+Alt+F to format
+            this.editor.commands.addCommand({
+                name: 'formatSQL',
+                bindKey: { win: 'Shift-Alt-F', mac: 'Shift-Option-F' },
+                exec: () => this.formatSQL()
+            });
+            
+            // Resize observer to update editor when container is resized
+            const container = document.getElementById('sql-editor-container');
+            if (container && typeof ResizeObserver !== 'undefined') {
+                const resizeObserver = new ResizeObserver(() => {
+                    this.editor.resize();
+                });
+                resizeObserver.observe(container);
+            }
+        },
+        
+        formatSQL() {
+            if (!this.editor || typeof sqlFormatter === 'undefined') return;
+            
+            try {
+                const currentSQL = this.editor.getValue();
+                const formatted = sqlFormatter.format(currentSQL, {
+                    language: 'sqlite',
+                    tabWidth: 2,
+                    useTabs: false,
+                    keywordCase: 'upper',
+                    linesBetweenQueries: 2
+                });
+                this.editor.setValue(formatted, -1);
+                this.editor.clearSelection();
+            } catch (e) {
+                console.warn('SQL formatting failed:', e);
+            }
         },
         
         runQuery(name, form) {
@@ -22,79 +148,6 @@ function queryPage() {
             }
             this.runningQuery = name;
             setTimeout(() => form.submit(), 100);
-        },
-        
-        updateHighlight() {
-            this.lineCount = Math.max(1, (this.sql.match(/\n/g) || []).length + 1);
-
-            if (typeof Prism !== 'undefined' && Prism.languages.sql) {
-                // Use Prism.js for robust SQL highlighting
-                let highlighted = Prism.highlight(this.sql, Prism.languages.sql, 'sql');
-
-                // Custom highlighting for app-specific table names
-                highlighted = highlighted.replace(/\b(redis_commands|key_size_cache)\b/gi, '<span class="token table">$1</span>');
-
-                this.highlightedSQL = highlighted;
-            } else {
-                // Fallback: use custom highlighting (similar to original)
-                let code = this.sql
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;');
-
-                // SQL Keywords (purple)
-                const keywords = ['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
-                    'ORDER', 'BY', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'AS', 'ON', 'JOIN',
-                    'LEFT', 'RIGHT', 'INNER', 'OUTER', 'CROSS', 'UNION', 'ALL', 'DISTINCT',
-                    'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE',
-                    'DROP', 'ALTER', 'INDEX', 'VIEW', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
-                    'ASC', 'DESC', 'BETWEEN', 'LIKE', 'EXISTS', 'CAST', 'COALESCE', 'NULLIF'];
-
-                // Functions (amber)
-                const functions = ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'ROUND', 'LENGTH', 'SUBSTR',
-                    'UPPER', 'LOWER', 'TRIM', 'REPLACE', 'INSTR', 'IFNULL', 'TYPEOF', 'ABS',
-                    'DATE', 'TIME', 'DATETIME', 'STRFTIME', 'TOTAL', 'GROUP_CONCAT', 'RANDOM'];
-
-                keywords.forEach(kw => {
-                    const regex = new RegExp(`\\b(${kw})\\b`, 'gi');
-                    code = code.replace(regex, '<span class="text-orange-400 font-semibold">$1</span>');
-                });
-
-                functions.forEach(fn => {
-                    const regex = new RegExp(`\\b(${fn})\\s*\\(`, 'gi');
-                    code = code.replace(regex, '<span class="text-amber-400">$1</span>(');
-                });
-
-                // Strings (green)
-                code = code.replace(/'([^']*)'/g, '<span class="text-emerald-400">\'$1\'</span>');
-                code = code.replace(/"([^"]*)"/g, '<span class="text-emerald-400">"$1"</span>');
-
-                // Numbers (cyan)
-                code = code.replace(/\b(\d+\.?\d*)\b/g, '<span class="text-cyan-400">$1</span>');
-
-                // Table names (white bold)
-                code = code.replace(/\b(redis_commands|key_size_cache)\b/gi, '<span class="text-white font-medium">$1</span>');
-
-                // Operators (pink)
-                code = code.replace(/([=&lt;&gt;!]+)/g, '<span class="text-pink-400">$1</span>');
-                code = code.replace(/(\*)/g, '<span class="text-pink-400">$1</span>');
-
-                // Comments (gray)
-                code = code.replace(/(--.*$)/gm, '<span class="text-slate-500 italic">$1</span>');
-
-                this.highlightedSQL = code;
-            }
-        },
-        
-        insertTab(event) {
-            const textarea = event.target;
-            const start = textarea.selectionStart;
-            const end = textarea.selectionEnd;
-            this.sql = this.sql.substring(0, start) + '  ' + this.sql.substring(end);
-            this.$nextTick(() => {
-                textarea.selectionStart = textarea.selectionEnd = start + 2;
-                this.updateHighlight();
-            });
         }
     }
 }
@@ -319,8 +372,9 @@ function queryPage() {
     </div>
 
     <!-- SQL Editor -->
-    <form method="GET" class="space-y-4" x-show="selectedJobId" x-transition>
+    <form method="GET" id="sql-form" class="space-y-4" x-show="selectedJobId" x-transition x-init="$nextTick(() => initAceEditor())">
         <input type="hidden" name="job_id" :value="selectedJobId">
+        <input type="hidden" name="sql" id="sql-hidden" :value="sql">
         <div class="glass-card rounded-xl p-6">
             <div class="flex items-center justify-between mb-3">
                 <label class="block text-sm font-medium text-slate-300 flex items-center gap-2">
@@ -336,46 +390,35 @@ function queryPage() {
                 </div>
             </div>
             
-            <!-- Syntax Highlighted SQL Editor -->
-            <div class="relative rounded-xl overflow-hidden border border-slate-700/50 focus-within:border-emerald-500/50 focus-within:ring-1 focus-within:ring-emerald-500/50 transition-all">
-                <!-- Line numbers gutter -->
-                <div class="absolute left-0 top-0 bottom-0 w-10 bg-slate-900/80 border-r border-slate-700/50 flex flex-col pt-3 text-right pr-2 text-xs text-slate-600 font-mono select-none overflow-hidden" aria-hidden="true">
-                    <template x-for="n in lineCount" :key="n">
-                        <div class="leading-6" x-text="n"></div>
-                    </template>
-                </div>
-                
-                <!-- Highlighted code layer (behind) -->
-                <pre class="absolute inset-0 pl-12 pr-4 py-3 m-0 overflow-auto pointer-events-none font-mono text-sm leading-6 whitespace-pre-wrap break-words language-sql text-white"
-                      style="background: rgba(15, 23, 42, 0.95);"
-                      aria-hidden="true"
-                      x-html="highlightedSQL"></pre>
-                
-                <!-- Actual textarea (transparent, on top for input) -->
-                <textarea name="sql"
-                          x-ref="sqlInput"
-                          x-model="sql"
-                          @input="updateHighlight()"
-                          @keydown.tab.prevent="insertTab($event)"
-                          @keydown.ctrl.enter="$el.form.submit()"
-                          @keydown.meta.enter="$el.form.submit()"
-                          rows="6"
-                          spellcheck="false"
-                          placeholder="SELECT * FROM redis_commands LIMIT 10"
-                          class="relative w-full pl-12 pr-4 py-3 bg-transparent text-transparent caret-white font-mono text-sm leading-6 placeholder-slate-500 focus:outline-none resize-y min-h-[150px]">{{ sql }}</textarea>
+            <!-- Ace Editor Container (resizable) -->
+            <div id="sql-editor-container" class="rounded-xl border border-slate-700/50 focus-within:border-emerald-500/50">
+                <div id="sql-editor"></div>
             </div>
+            <p class="text-xs text-slate-600 mt-1">Drag bottom-right corner to resize</p>
             
             <div class="flex items-center justify-between mt-3">
                 <div class="flex items-center gap-4">
-                    <p class="text-xs text-slate-500">Only SELECT queries • <kbd class="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400">Ctrl</kbd>+<kbd class="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400">Enter</kbd> to run</p>
+                    <p class="text-xs text-slate-500">
+                        Only SELECT queries • 
+                        <kbd class="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400">Ctrl</kbd>+<kbd class="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400">Enter</kbd> run • 
+                        <kbd class="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400">Shift</kbd>+<kbd class="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400">Alt</kbd>+<kbd class="px-1.5 py-0.5 bg-slate-700 rounded text-slate-400">F</kbd> format
+                    </p>
                 </div>
-                <button type="submit" class="px-5 py-2 rounded-lg bg-emerald-500 text-white font-medium hover:bg-emerald-600 transition-colors flex items-center gap-2 shadow-lg shadow-emerald-500/20">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    Run Query
-                </button>
+                <div class="flex items-center gap-2">
+                    <button type="button" @click="formatSQL()" class="px-4 py-2 rounded-lg bg-slate-700 text-slate-300 font-medium hover:bg-slate-600 hover:text-white transition-colors flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" />
+                        </svg>
+                        Format
+                    </button>
+                    <button type="submit" class="px-5 py-2 rounded-lg bg-emerald-500 text-white font-medium hover:bg-emerald-600 transition-colors flex items-center gap-2 shadow-lg shadow-emerald-500/20">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Run Query
+                    </button>
+                </div>
             </div>
         </div>
     </form>
